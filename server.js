@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb'); // ObjectId adicionado
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb'); // ObjectId IMPORTADO
 const bcrypt = require('bcryptjs');
 
 const app = express();
@@ -301,6 +301,36 @@ app.delete('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
     } catch (error) {
         console.error('Erro ao excluir veículo:', error);
         res.status(500).json({ message: 'Erro interno ao tentar excluir veículo.' });
+    }
+});
+
+// GET /api/veiculos/:id - Buscar um veículo específico pelo ID
+app.get('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
+    if (!db) {
+        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
+    }
+
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "ID de veículo inválido." });
+    }
+
+    try {
+        const veiculosCollection = db.collection('veiculos');
+        const veiculo = await veiculosCollection.findOne({ _id: new ObjectId(id) });
+
+        if (!veiculo) {
+            console.log('Busca de detalhes: Veículo com ID não encontrado ->', id);
+            return res.status(404).json({ message: "Veículo não encontrado." });
+        }
+
+        console.log('Detalhes do veículo buscado com sucesso. ID:', id);
+        res.status(200).json(veiculo);
+
+    } catch (error) {
+        console.error('Erro ao buscar detalhes do veículo:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar buscar detalhes do veículo.' });
     }
 });
 
