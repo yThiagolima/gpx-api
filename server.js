@@ -27,7 +27,9 @@ let db; // Variável para armazenar a instância do banco de dados
 async function connectDB() {
     try {
         await client.connect();
-        db = client.db("GPX7_DB"); // Seleciona o banco de dados GPX7_DB (ou o nome que você usou na URI)
+        // Lembre-se de usar o nome do banco de dados que você definiu na sua MONGODB_URI
+        // Ex: mongodb+srv://user:pass@cluster.mongodb.net/GPX7_DB -> client.db("GPX7_DB")
+        db = client.db("GPX7_DB"); 
         console.log("Conectado com sucesso ao MongoDB!");
     } catch (err) {
         console.error("Falha ao conectar com o MongoDB", err);
@@ -79,10 +81,10 @@ app.post('/register', async (req, res) => {
             password: hashedPassword,
             createdAt: new Date()
         };
-        await usersCollection.insertOne(newUser);
+        const result = await usersCollection.insertOne(newUser);
 
-        console.log('Novo usuário registrado:', newUser.email);
-        res.status(201).json({ message: 'Usuário registrado com sucesso!', userId: newUser._id }); // 201 Created
+        console.log('Novo usuário registrado:', newUser.email, 'ID:', result.insertedId);
+        res.status(201).json({ message: 'Usuário registrado com sucesso!', userId: result.insertedId }); // 201 Created
 
     } catch (error) {
         console.error('Erro ao registrar usuário:', error);
@@ -103,11 +105,12 @@ app.post('/login', (req, res) => {
         return res.status(400).json({ message: 'Email e senha são obrigatórios!' });
     }
 
+    // Lembre-se que este é o mock user, não está vindo do banco ainda.
     const mockUserEmail = 'usuario@gpx7.com';
     const mockUserPassword = 'senha123';
 
     if (email === mockUserEmail && password === mockUserPassword) {
-        console.log('Login bem-sucedido para:', email);
+        console.log('Login bem-sucedido para (mock user):', email);
         res.status(200).json({
             message: 'Login bem-sucedido!',
             user: {
@@ -116,7 +119,9 @@ app.post('/login', (req, res) => {
             }
         });
     } else {
-        console.log('Falha no login para:', email);
+        // Se não for o mock user, e ainda não implementamos a busca no DB para login,
+        // esta mensagem será mostrada para qualquer outra tentativa.
+        console.log('Falha no login para:', email, '(não corresponde ao mock user)');
         res.status(401).json({ message: 'Email ou senha inválidos.' });
     }
 });
