@@ -87,7 +87,7 @@ app.post('/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         const newUser = {
-            username: username,
+            username: username, // Mantém o case original para exibição, mas busca por minúsculo
             email: emailInputLower,
             password: hashedPassword,
             createdAt: new Date()
@@ -124,7 +124,7 @@ app.post('/login', async (req, res) => {
 
         const user = await usersCollection.findOne({
             $or: [
-                { username: loginIdentifierLower },
+                { username: { $regex: new RegExp(`^${loginIdentifierLower}$`, 'i') } }, // Case-insensitive username search
                 { email: loginIdentifierLower }
             ]
         });
@@ -146,7 +146,7 @@ app.post('/login', async (req, res) => {
             message: 'Login bem-sucedido!',
             user: {
                 id: user._id,
-                username: user.username,
+                username: user.username, // Retorna o username com o case original
                 email: user.email
             }
         });
@@ -165,29 +165,77 @@ const simpleAuthCheck = (req, res, next) => {
 
 // --- ROTAS DA API PARA A DASHBOARD (MOCKADAS) ---
 app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => {
-    console.log('Requisição recebida em /api/dashboard/stats');
-    const mockStats = {
-        totalVeiculos: Math.floor(Math.random() * 50) + 5,
-        alertasAtivos: Math.floor(Math.random() * 10),
-        manutencoesAgendadas: Math.floor(Math.random() * 15)
-    };
-    res.json(mockStats);
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const totalVeiculos = await db.collection('veiculos').countDocuments();
+        // Lógica para alertas e manutenções agendadas seria mais complexa
+        // Por agora, vamos mockar ou simplificar
+        const proximasManutencoes = await db.collection('veiculos').find({
+            $or: [
+                { 'manutencaoInfo.proxTrocaOleoData': { $gte: new Date() } },
+                { 'manutencaoInfo.dataProxChecklist': { $gte: new Date() } }
+            ]
+        }).toArray();
+        
+        // Contar alertas de KM para troca de óleo (simplificado)
+        const veiculosComProxTrocaKm = await db.collection('veiculos').find({
+            'manutencaoInfo.proxTrocaOleoKm': { $exists: true, $ne: null }
+        }).toArray();
+
+        let alertasKmOleo = 0;
+        veiculosComProxTrocaKm.forEach(v => {
+            if (v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) {
+                alertasKmOleo++;
+            }
+        });
+
+        const stats = {
+            totalVeiculos: totalVeiculos,
+            alertasAtivos: proximasManutencoes.length + alertasKmOleo, // Exemplo
+            manutencoesAgendadas: proximasManutencoes.length // Exemplo
+        };
+        res.json(stats);
+    } catch (error) {
+        console.error("Erro em /api/dashboard/stats:", error);
+        res.status(500).json({ message: "Erro ao buscar estatísticas."});
+    }
 });
 
 app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
-    console.log('Requisição recebida em /api/dashboard/recent-activity');
-    const mockActivity = [
-        { id: 1, tipo: 'abastecimento', descricao: 'Abastecimento veículo Placa XYZ-1234 (R$ 150,00)', data: new Date(Date.now() - 1 * 60 * 60 * 1000) },
-        { id: 2, tipo: 'manutencao', descricao: 'Manutenção preventiva VW Gol (Placa ABC-4321) concluída.', data: new Date(Date.now() - 5 * 60 * 60 * 1000) },
-        { id: 3, tipo: 'multa', descricao: 'Nova multa registrada para Ford Ka (Placa QWE-0000).', data: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        { id: 4, tipo: 'checklist', descricao: 'Checklist diário Veículo 05 realizado.', data: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
-    ];
-    res.json(mockActivity);
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const manutencoesRecentes = await db.collection('manutencoes')
+            .find().sort({ dataRealizacao: -1 }).limit(3).toArray();
+        const checklistsRecentes = await db.collection('checklists') // Supondo que você tenha uma coleção 'checklists'
+            .find().sort({ dataRealizacao: -1 }).limit(2).toArray();
+        const abastecimentosRecentes = await db.collection('abastecimentos')
+            .find().sort({data: -1}).limit(2).toArray();
+
+        let activities = [];
+        manutencoesRecentes.forEach(m => activities.push({
+            id: m._id, tipo: 'manutencao',
+            descricao: `Manutenção (${m.tipoManutencao || 'Geral'}) veículo ${m.veiculoPlaca || ''}`, data: m.dataRealizacao
+        }));
+        checklistsRecentes.forEach(c => activities.push({
+            id: c._id, tipo: 'checklist',
+            descricao: `Checklist veículo ${c.veiculoPlaca || ''} por ${c.realizadoPor || 'N/A'}`, data: c.dataRealizacao
+        }));
+        abastecimentosRecentes.forEach(a => activities.push({
+            id: a._id, tipo: 'abastecimento',
+            descricao: `Abastecimento ${a.veiculoPlaca || ''} (${a.litros}L)`, data: a.data
+        }));
+
+        activities.sort((a, b) => new Date(b.data) - new Date(a.data));
+        activities = activities.slice(0, 5); // Pega as 5 mais recentes no geral
+
+        res.json(activities);
+    } catch (error) {
+        console.error("Erro em /api/dashboard/recent-activity:", error);
+        res.status(500).json({ message: "Erro ao buscar atividades."});
+    }
 });
 
 // --- ROTAS DA API PARA VEÍCULOS ---
-
-// GET /api/veiculos - Listar todos os veículos
 app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (!db) {
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
@@ -202,28 +250,23 @@ app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
     }
 });
 
-// POST /api/veiculos - Cadastrar um novo veículo
 app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (!db) {
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
     }
-
     const {
         placa, marca, modelo, anoFabricacao, anoModelo, cor,
         chassi, renavam, quilometragemAtual, oleoKm, oleoData, frequenciaChecklist
     } = req.body;
 
-    // Converte valores para número ou null
     const parsedAnoFabricacao = anoFabricacao ? parseInt(anoFabricacao, 10) : null;
     const parsedAnoModelo = anoModelo ? parseInt(anoModelo, 10) : null;
     const parsedQuilometragemAtual = quilometragemAtual !== undefined && quilometragemAtual !== null ? parseInt(quilometragemAtual, 10) : null;
     const parsedOleoKm = oleoKm ? parseInt(oleoKm, 10) : null;
     const parsedFrequenciaChecklist = frequenciaChecklist ? parseInt(frequenciaChecklist, 10) : null;
     const parsedOleoData = oleoData ? new Date(oleoData) : null;
-
-    // Calcula data do próximo checklist
     const dataProxChecklist = parsedFrequenciaChecklist && parsedFrequenciaChecklist > 0
-        ? new Date(Date.now() + parsedFrequenciaChecklist * 24 * 60 * 60 * 1000)
+        ? new Date(new Date().setDate(new Date().getDate() + parsedFrequenciaChecklist))
         : null;
 
     if (!placa || !marca || !modelo || parsedAnoFabricacao === null || parsedAnoModelo === null || parsedQuilometragemAtual === null) {
@@ -231,19 +274,11 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
             message: "Campos obrigatórios não preenchidos: Placa, Marca, Modelo, Ano Fabricação, Ano Modelo, Quilometragem Atual."
         });
     }
-    if (typeof parsedQuilometragemAtual !== 'number' || parsedQuilometragemAtual < 0) {
-        return res.status(400).json({ message: "Quilometragem atual inválida." });
-    }
-    if (parsedAnoFabricacao && (typeof parsedAnoFabricacao !== 'number' || parsedAnoFabricacao < 1900 || parsedAnoFabricacao > new Date().getFullYear() + 2)) {
-        return res.status(400).json({ message: "Ano de fabricação inválido." });
-    }
-    if (parsedAnoModelo && (typeof parsedAnoModelo !== 'number' || parsedAnoModelo < 1900 || parsedAnoModelo > new Date().getFullYear() + 2)) {
-        return res.status(400).json({ message: "Ano do modelo inválido." });
-    }
+    // Add more validations as needed
 
     try {
         const veiculosCollection = db.collection('veiculos');
-        const placaUpper = placa.toUpperCase().replace(/[^A-Z0-9]/g, ''); // Remove caracteres não alfanuméricos da placa para padronizar
+        const placaUpper = placa.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
         const existingVeiculo = await veiculosCollection.findOne({ placa: placaUpper });
         if (existingVeiculo) {
@@ -251,417 +286,453 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
         }
 
         const novoVeiculo = {
-            placa: placaUpper,
-            marca: marca.trim(),
-            modelo: modelo.trim(),
-            anoFabricacao: parsedAnoFabricacao,
-            anoModelo: parsedAnoModelo,
-            cor: cor ? cor.trim() : null,
-            chassi: chassi ? chassi.trim() : null,
-            renavam: renavam ? renavam.trim() : null,
-            quilometragemAtual: parsedQuilometragemAtual,
+            placa: placaUpper, marca: marca.trim(), modelo: modelo.trim(),
+            anoFabricacao: parsedAnoFabricacao, anoModelo: parsedAnoModelo,
+            cor: cor ? cor.trim() : null, chassi: chassi ? chassi.trim() : null,
+            renavam: renavam ? renavam.trim() : null, quilometragemAtual: parsedQuilometragemAtual,
             manutencaoInfo: {
-                proxTrocaOleoKm: parsedOleoKm,
-                proxTrocaOleoData: parsedOleoData,
-                frequenciaChecklistDias: parsedFrequenciaChecklist,
-                dataProxChecklist: dataProxChecklist,
+                proxTrocaOleoKm: parsedOleoKm, proxTrocaOleoData: parsedOleoData,
+                frequenciaChecklistDias: parsedFrequenciaChecklist, dataProxChecklist: dataProxChecklist,
+                ultimaTrocaOleoKm: null, ultimaTrocaOleoData: null, // Adicionado para melhor controle
+                ultimoChecklistData: null // Adicionado para melhor controle
             },
             dataCadastro: new Date(),
         };
-
         const result = await veiculosCollection.insertOne(novoVeiculo);
-        console.log('Novo veículo cadastrado:', novoVeiculo.placa, 'ID:', result.insertedId);
-
         res.status(201).json({
             message: 'Veículo cadastrado com sucesso!',
             veiculo: { _id: result.insertedId, ...novoVeiculo }
         });
-
     } catch (error) {
         console.error('Erro ao cadastrar veículo:', error);
-        if (error.code === 11000) { // Duplication key error
-            return res.status(409).json({ message: `Erro: Dados duplicados (ex: placa ou chassi já existe).` });
-        }
         res.status(500).json({ message: 'Erro interno ao tentar cadastrar veículo.' });
     }
 });
 
-
-// DELETE /api/veiculos/:id - Excluir um veículo
 app.delete('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
-
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "ID de veículo inválido." });
-    }
-
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID inválido." });
     try {
-        const veiculosCollection = db.collection('veiculos');
-        const result = await veiculosCollection.deleteOne({ _id: new ObjectId(id) });
-
-        if (result.deletedCount === 0) {
-            console.log('Tentativa de exclusão: Veículo com ID não encontrado ->', id);
-            return res.status(404).json({ message: "Veículo não encontrado para exclusão." });
-        }
-
-        console.log('Veículo excluído com sucesso. ID:', id);
-        res.status(200).json({ message: "Veículo excluído com sucesso.", id: id });
-
+        const result = await db.collection('veiculos').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) return res.status(404).json({ message: "Veículo não encontrado." });
+        // Adicional: Excluir manutenções, checklists e abastecimentos associados a este veículo
+        await db.collection('manutencoes').deleteMany({ veiculoId: new ObjectId(id) });
+        await db.collection('checklists').deleteMany({ veiculoId: new ObjectId(id) });
+        await db.collection('abastecimentos').deleteMany({ veiculoId: new ObjectId(id) });
+        res.status(200).json({ message: "Veículo e seus registros associados foram excluídos." });
     } catch (error) {
         console.error('Erro ao excluir veículo:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar excluir veículo.' });
+        res.status(500).json({ message: 'Erro ao excluir veículo.' });
     }
 });
 
-// GET /api/veiculos/:id - Buscar um veículo específico pelo ID
 app.get('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
-
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "ID de veículo inválido." });
-    }
-
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID inválido." });
     try {
-        const veiculosCollection = db.collection('veiculos');
-        const veiculo = await veiculosCollection.findOne({ _id: new ObjectId(id) });
-
-        if (!veiculo) {
-            console.log('Busca de detalhes: Veículo com ID não encontrado ->', id);
-            return res.status(404).json({ message: "Veículo não encontrado." });
-        }
-
-        console.log('Detalhes do veículo buscado com sucesso. ID:', id);
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(id) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
         res.status(200).json(veiculo);
-
     } catch (error) {
-        console.error('Erro ao buscar detalhes do veículo:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar buscar detalhes do veículo.' });
+        console.error('Erro ao buscar veículo:', error);
+        res.status(500).json({ message: 'Erro ao buscar veículo.' });
     }
 });
 
-// PUT /api/veiculos/:id - Atualizar um veículo existente
 app.put('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
-
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID inválido." });
+
     const {
         placa, marca, modelo, anoFabricacao, anoModelo, cor,
         chassi, renavam, quilometragemAtual, oleoKm, oleoData, frequenciaChecklist
     } = req.body;
 
-    if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "ID de veículo inválido." });
-    }
-
-    // Converte valores para número ou null, igual no POST
     const parsedAnoFabricacao = anoFabricacao ? parseInt(anoFabricacao, 10) : null;
     const parsedAnoModelo = anoModelo ? parseInt(anoModelo, 10) : null;
     const parsedQuilometragemAtual = quilometragemAtual !== undefined && quilometragemAtual !== null ? parseInt(quilometragemAtual, 10) : null;
     const parsedOleoKm = oleoKm ? parseInt(oleoKm, 10) : null;
     const parsedFrequenciaChecklist = frequenciaChecklist ? parseInt(frequenciaChecklist, 10) : null;
     const parsedOleoData = oleoData ? new Date(oleoData) : null;
+    
+    const veiculoAtual = await db.collection('veiculos').findOne({ _id: new ObjectId(id) });
+    if (!veiculoAtual) return res.status(404).json({ message: "Veículo não encontrado para atualização." });
 
-    // Recalcula data do próximo checklist se a frequência foi alterada ou definida
-    const dataProxChecklist = parsedFrequenciaChecklist && parsedFrequenciaChecklist > 0
-        ? new Date(Date.now() + parsedFrequenciaChecklist * 24 * 60 * 60 * 1000)
-        : null;
+    let dataProxChecklist = veiculoAtual.manutencaoInfo.dataProxChecklist;
+    if (parsedFrequenciaChecklist && parsedFrequenciaChecklist > 0 &&
+        (veiculoAtual.manutencaoInfo.frequenciaChecklistDias !== parsedFrequenciaChecklist || !veiculoAtual.manutencaoInfo.dataProxChecklist)
+    ) {
+        const baseDateForChecklist = veiculoAtual.manutencaoInfo.ultimoChecklistData || new Date();
+        dataProxChecklist = new Date(new Date(baseDateForChecklist).setDate(new Date(baseDateForChecklist).getDate() + parsedFrequenciaChecklist));
+    }
 
 
     if (!placa || !marca || !modelo || parsedAnoFabricacao === null || parsedAnoModelo === null || parsedQuilometragemAtual === null) {
-        return res.status(400).json({
-            message: "Campos obrigatórios (Placa, Marca, Modelo, Ano Fabricação, Ano Modelo, Quilometragem Atual) devem ser preenchidos."
-        });
+        return res.status(400).json({ message: "Campos obrigatórios devem ser preenchidos." });
     }
 
     const updatedFields = {
         placa: placa.toUpperCase().replace(/[^A-Z0-9]/g, ''),
-        marca: marca.trim(),
-        modelo: modelo.trim(),
-        anoFabricacao: parsedAnoFabricacao,
-        anoModelo: parsedAnoModelo,
-        cor: cor ? cor.trim() : null,
-        chassi: chassi ? chassi.trim() : null,
-        renavam: renavam ? renavam.trim() : null,
-        quilometragemAtual: parsedQuilometragemAtual,
-        manutencaoInfo: {
-            proxTrocaOleoKm: parsedOleoKm,
-            proxTrocaOleoData: parsedOleoData,
-            frequenciaChecklistDias: parsedFrequenciaChecklist,
-            dataProxChecklist: dataProxChecklist // Adicionado no PUT
-        },
+        marca: marca.trim(), modelo: modelo.trim(),
+        anoFabricacao: parsedAnoFabricacao, anoModelo: parsedAnoModelo,
+        cor: cor ? cor.trim() : null, chassi: chassi ? chassi.trim() : null,
+        renavam: renavam ? renavam.trim() : null, quilometragemAtual: parsedQuilometragemAtual,
+        'manutencaoInfo.proxTrocaOleoKm': parsedOleoKm,
+        'manutencaoInfo.proxTrocaOleoData': parsedOleoData,
+        'manutencaoInfo.frequenciaChecklistDias': parsedFrequenciaChecklist,
+        'manutencaoInfo.dataProxChecklist': dataProxChecklist,
         dataAtualizacao: new Date()
     };
+    // Remove campos de manutencaoInfo se não forem fornecidos explicitamente para não sobrescrever com null
+    if (oleoKm === null || oleoKm === undefined) delete updatedFields['manutencaoInfo.proxTrocaOleoKm'];
+    if (oleoData === null || oleoData === undefined) delete updatedFields['manutencaoInfo.proxTrocaOleoData'];
+    if (frequenciaChecklist === null || frequenciaChecklist === undefined) {
+        delete updatedFields['manutencaoInfo.frequenciaChecklistDias'];
+        delete updatedFields['manutencaoInfo.dataProxChecklist'];
+    }
+
 
     try {
         const veiculosCollection = db.collection('veiculos');
-
-        // Verifica se a nova placa já existe em outro veículo
         const existingVeiculoWithSamePlaca = await veiculosCollection.findOne({
             placa: updatedFields.placa,
-            _id: { $ne: new ObjectId(id) } // Exclui o veículo atual da busca
+            _id: { $ne: new ObjectId(id) }
         });
-
         if (existingVeiculoWithSamePlaca) {
-            return res.status(409).json({ message: `Veículo com a placa ${updatedFields.placa} já está em uso por outro veículo.` });
+            return res.status(409).json({ message: `Placa ${updatedFields.placa} já em uso.` });
         }
 
         const result = await veiculosCollection.updateOne(
             { _id: new ObjectId(id) },
             { $set: updatedFields }
         );
-
-        if (result.matchedCount === 0) {
-            console.log('Tentativa de atualização: Veículo com ID não encontrado ->', id);
-            return res.status(404).json({ message: "Veículo não encontrado para atualização." });
-        }
-
-        console.log('Veículo atualizado com sucesso. ID:', id);
+        if (result.matchedCount === 0) return res.status(404).json({ message: "Veículo não encontrado." });
         res.status(200).json({ message: "Veículo atualizado com sucesso." });
-
     } catch (error) {
         console.error('Erro ao atualizar veículo:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar atualizar veículo.' });
+        res.status(500).json({ message: 'Erro ao atualizar veículo.' });
     }
 });
 
-
-// --- NOVAS ROTAS DA API PARA MANUTENÇÕES ---
-
-// GET /api/manutencoes/proximas - Listar próximas manutenções/alertas
+// --- ROTAS DA API PARA MANUTENÇÕES ---
 app.get('/api/manutencoes/proximas', simpleAuthCheck, async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     try {
-        const veiculosCollection = db.collection('veiculos');
+        const veiculos = await db.collection('veiculos').find({}).toArray();
         const hoje = new Date();
-        hoje.setHours(0, 0, 0, 0); // Considera a partir do início do dia
+        hoje.setHours(0,0,0,0);
+        const proximas = [];
 
-        // Busca veículos que têm próximas manutenções agendadas por data ou KM,
-        // ou onde a frequência de checklist indica um checklist pendente/próximo
-        // A lógica de alerta de KM seria mais complexa (quilometragem atual + km para próxima troca)
-        // Por simplicidade aqui, focaremos em datas e checklists com data calculada.
-        const veiculosComManutencaoInfo = await veiculosCollection.find({
-            $or: [
-                { 'manutencaoInfo.proxTrocaOleoData': { $gte: hoje } }, // Troca de óleo futura
-                { 'manutencaoInfo.dataProxChecklist': { $gte: hoje } } // Checklist futuro
-                // Poderíamos adicionar alertas para km aqui se tivéssemos um campo de 'ultimoKmTrocaOleo' no veiculo
-            ]
-        }).toArray();
-
-        const proximasManutencoes = [];
-
-        for (const v of veiculosComManutencaoInfo) {
-            // Próxima Troca de Óleo
-            if (v.manutencaoInfo && v.manutencaoInfo.proxTrocaOleoData) {
-                const dataOleo = new Date(v.manutencaoInfo.proxTrocaOleoData);
-                dataOleo.setHours(0, 0, 0, 0);
-
-                if (dataOleo >= hoje) { // Apenas se a data for futura ou hoje
-                    proximasManutencoes.push({
-                        _id: v._id.toString() + '_oleo', // ID único para o front-end
-                        veiculoId: v._id.toString(),
-                        veiculoPlaca: v.placa,
-                        tipo: 'Troca de Óleo',
-                        descricao: `Próxima troca de óleo prevista para ${dataOleo.toLocaleDateString('pt-BR')}` +
-                                   (v.manutencaoInfo.proxTrocaOleoKm ? ` ou ${v.manutencaoInfo.proxTrocaOleoKm.toLocaleString('pt-BR')} km` : ''),
-                        dataPrevista: dataOleo,
-                        kmPrevisto: v.manutencaoInfo.proxTrocaOleoKm,
-                    });
+        veiculos.forEach(v => {
+            if (v.manutencaoInfo) {
+                // Alerta Troca de Óleo por Data
+                if (v.manutencaoInfo.proxTrocaOleoData) {
+                    const dataOleo = new Date(v.manutencaoInfo.proxTrocaOleoData);
+                    if (dataOleo >= hoje) {
+                        proximas.push({
+                            _id: v._id.toString() + '_oleoData', veiculoId: v._id.toString(), veiculoPlaca: v.placa,
+                            tipo: 'Troca de Óleo',
+                            descricao: `Troca de óleo programada para ${dataOleo.toLocaleDateString('pt-BR')}.`,
+                            dataPrevista: dataOleo, kmPrevisto: v.manutencaoInfo.proxTrocaOleoKm
+                        });
+                    }
+                }
+                // Alerta Troca de Óleo por KM
+                if (v.manutencaoInfo.proxTrocaOleoKm && v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) {
+                     // Evitar duplicar se já listado por data e a data ainda não passou mas KM sim
+                    if (!proximas.find(p => p._id === v._id.toString() + '_oleoData' && new Date(p.dataPrevista) >= hoje)) {
+                        proximas.push({
+                            _id: v._id.toString() + '_oleoKm', veiculoId: v._id.toString(), veiculoPlaca: v.placa,
+                            tipo: 'Troca de Óleo',
+                            descricao: `Troca de óleo por KM atingida (${v.quilometragemAtual.toLocaleString('pt-BR')}km de ${v.manutencaoInfo.proxTrocaOleoKm.toLocaleString('pt-BR')}km).`,
+                            dataPrevista: null, // Ou a data atual se quiser forçar uma data
+                            kmPrevisto: v.manutencaoInfo.proxTrocaOleoKm,
+                            kmAtual: v.quilometragemAtual,
+                            alertaKm: true
+                        });
+                    }
+                }
+                // Alerta Próximo Checklist
+                if (v.manutencaoInfo.dataProxChecklist) {
+                    const dataCheck = new Date(v.manutencaoInfo.dataProxChecklist);
+                    if (dataCheck >= hoje) {
+                        proximas.push({
+                            _id: v._id.toString() + '_checklist', veiculoId: v._id.toString(), veiculoPlaca: v.placa,
+                            tipo: 'Checklist',
+                            descricao: `Checklist periódico para ${dataCheck.toLocaleDateString('pt-BR')}. Frequência: ${v.manutencaoInfo.frequenciaChecklistDias || 'N/A'} dias.`,
+                            dataPrevista: dataCheck
+                        });
+                    }
                 }
             }
-
-            // Próximo Checklist
-            if (v.manutencaoInfo && v.manutencaoInfo.dataProxChecklist) {
-                const dataChecklist = new Date(v.manutencaoInfo.dataProxChecklist);
-                dataChecklist.setHours(0, 0, 0, 0);
-
-                if (dataChecklist >= hoje) { // Apenas se a data for futura ou hoje
-                    proximasManutencoes.push({
-                        _id: v._id.toString() + '_checklist', // ID único para o front-end
-                        veiculoId: v._id.toString(),
-                        veiculoPlaca: v.placa,
-                        tipo: 'Checklist',
-                        descricao: `Próximo checklist diário/periódico previsto para ${dataChecklist.toLocaleDateString('pt-BR')}`,
-                        dataPrevista: dataChecklist,
-                        frequencia: v.manutencaoInfo.frequenciaChecklistDias,
-                    });
-                }
-            }
-        }
-
-        // Ordena por data prevista, se existir, para mostrar o mais próximo primeiro
-        proximasManutencoes.sort((a, b) => {
-            const dateA = a.dataPrevista ? new Date(a.dataPrevista) : new Date(8640000000000000); // Max date
-            const dateB = b.dataPrevista ? new Date(b.dataPrevista) : new Date(8640000000000000);
-            return dateA.getTime() - dateB.getTime();
         });
-
-        res.status(200).json(proximasManutencoes);
+        proximas.sort((a, b) => (a.dataPrevista || new Date(8640000000000000)) - (b.dataPrevista || new Date(8640000000000000)));
+        res.status(200).json(proximas);
     } catch (error) {
         console.error('Erro ao buscar próximas manutenções:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar buscar próximas manutenções.' });
+        res.status(500).json({ message: 'Erro ao buscar próximas manutenções.' });
     }
 });
 
-// GET /api/manutencoes/historico - Listar histórico de manutenções
 app.get('/api/manutencoes/historico', simpleAuthCheck, async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { search } = req.query;
-
     try {
-        const manutencoesCollection = db.collection('manutencoes'); // Nova coleção 'manutencoes'
-        let query = {};
+        const query = {};
         if (search) {
             const searchRegex = new RegExp(search, 'i');
-            query = {
-                $or: [
-                    { veiculoPlaca: searchRegex },
-                    { tipoManutencao: searchRegex },
-                    { descricao: searchRegex }
-                ]
-            };
+            query.$or = [
+                { veiculoPlaca: searchRegex }, { tipoManutencao: searchRegex }, { descricao: searchRegex }
+            ];
         }
-
-        // Exemplo de estrutura de um documento na coleção 'manutencoes':
-        // {
-        //   _id: ObjectId("..."),
-        //   veiculoId: ObjectId("..."), // Link para o _id do veículo
-        //   veiculoPlaca: "ABC1D23",
-        //   tipoManutencao: "Troca de Óleo", // ou "Revisão", "Pneu", "Checklist", etc.
-        //   dataRealizacao: new Date(),
-        //   custo: 250.00, // Opcional
-        //   descricao: "Troca de óleo e filtro de ar.",
-        //   quilometragem: 60000, // Quilometragem na data da manutenção
-        //   realizadaPor: "Oficina ABC", // Opcional
-        //   dataRegistro: new Date() // Data de registro no sistema
-        // }
-        const historico = await manutencoesCollection.find(query).sort({ dataRealizacao: -1, dataRegistro: -1 }).toArray();
+        const historico = await db.collection('manutencoes').find(query).sort({ dataRealizacao: -1 }).toArray();
         res.status(200).json(historico);
     } catch (error) {
         console.error('Erro ao buscar histórico de manutenções:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar buscar histórico de manutenções.' });
+        res.status(500).json({ message: 'Erro ao buscar histórico.' });
     }
 });
 
-// POST /api/manutencoes - Adicionar uma nova manutenção (histórico ou agendamento)
 app.post('/api/manutencoes', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { veiculoId, veiculoPlaca, tipoManutencao, dataRealizacao, custo, descricao, quilometragem, realizadaPor } = req.body;
+    if (!veiculoId || !veiculoPlaca || !tipoManutencao || !dataRealizacao) {
+        return res.status(400).json({ message: 'Campos obrigatórios não preenchidos.' });
+    }
+    if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID do veículo inválido." });
+
+    try {
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
+
+        const novaManutencao = {
+            veiculoId: new ObjectId(veiculoId), veiculoPlaca: veiculoPlaca.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+            tipoManutencao: tipoManutencao.trim(), dataRealizacao: new Date(dataRealizacao),
+            custo: custo ? parseFloat(custo) : null, descricao: descricao ? descricao.trim() : null,
+            quilometragem: quilometragem ? parseInt(quilometragem, 10) : null,
+            realizadaPor: realizadaPor ? realizadaPor.trim() : null, dataRegistro: new Date()
+        };
+        const result = await db.collection('manutencoes').insertOne(novaManutencao);
+
+        // Atualizar dados do veículo se a manutenção for relevante (ex: troca de óleo)
+        let updateVeiculoFields = {};
+        const kmManutencao = novaManutencao.quilometragem;
+
+        if (kmManutencao && kmManutencao > veiculo.quilometragemAtual) {
+             updateVeiculoFields.quilometragemAtual = kmManutencao;
+        }
+
+        if (tipoManutencao.toLowerCase().includes('óleo') || tipoManutencao.toLowerCase().includes('oleo')) {
+            updateVeiculoFields['manutencaoInfo.ultimaTrocaOleoData'] = novaManutencao.dataRealizacao;
+            if (kmManutencao) {
+                updateVeiculoFields['manutencaoInfo.ultimaTrocaOleoKm'] = kmManutencao;
+            }
+            // Recalcular próxima troca se houver padrão (ex: a cada 10.000km ou 6 meses)
+            // Essa lógica pode ser mais elaborada, buscando a frequência no cadastro do veículo
+            // Exemplo simples: se o veículo tem proxTrocaOleoKm definido, e essa manutenção é uma troca de óleo,
+            // você pode querer que o usuário defina a *próxima* através da edição do veículo,
+            // ou ter uma regra padrão aqui.
+            // Por agora, apenas registra a "última". O usuário ajusta a "próxima" em editar_veiculo.html.
+        }
+        
+        if (Object.keys(updateVeiculoFields).length > 0) {
+            await db.collection('veiculos').updateOne({ _id: new ObjectId(veiculoId) }, { $set: updateVeiculoFields });
+        }
+
+        res.status(201).json({ message: 'Manutenção registrada!', manutencao: { _id: result.insertedId, ...novaManutencao } });
+    } catch (error) {
+        console.error('Erro ao registrar manutenção:', error);
+        res.status(500).json({ message: 'Erro ao registrar manutenção.' });
+    }
+});
+
+app.delete('/api/manutencoes/:id', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID inválido." });
+    try {
+        const result = await db.collection('manutencoes').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) return res.status(404).json({ message: "Manutenção não encontrada." });
+        res.status(200).json({ message: "Manutenção excluída." });
+    } catch (error) {
+        console.error('Erro ao excluir manutenção:', error);
+        res.status(500).json({ message: 'Erro ao excluir manutenção.' });
+    }
+});
+
+
+// --- ROTAS DA API PARA CHECKLISTS ---
+// (Supondo que você usará 'checklists' como o nome da coleção)
+
+// GET /api/checklists/historico
+app.get('/api/checklists/historico', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { search } = req.query;
+    try {
+        const query = {};
+        if (search) {
+            const searchRegex = new RegExp(search, 'i');
+            query.$or = [
+                { veiculoPlaca: searchRegex }, { realizadoPor: searchRegex }, { observacoes: searchRegex }
+            ];
+        }
+        const historico = await db.collection('checklists').find(query).sort({ dataRealizacao: -1 }).toArray();
+        res.status(200).json(historico);
+    } catch (error) {
+        console.error('Erro ao buscar histórico de checklists:', error);
+        res.status(500).json({ message: 'Erro ao buscar histórico de checklists.' });
+    }
+});
+
+// POST /api/checklists
+app.post('/api/checklists', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { veiculoId, veiculoPlaca, dataRealizacao, quilometragem, realizadoPor, observacoes } = req.body;
+
+    if (!veiculoId || !veiculoPlaca || !dataRealizacao || !quilometragem) {
+        return res.status(400).json({ message: 'Campos obrigatórios (veiculo, data, km) não preenchidos.' });
+    }
+    if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID do veículo inválido." });
+
+    try {
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
+
+        const novoChecklist = {
+            veiculoId: new ObjectId(veiculoId),
+            veiculoPlaca: veiculoPlaca.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+            dataRealizacao: new Date(dataRealizacao),
+            quilometragem: parseInt(quilometragem, 10),
+            realizadoPor: realizadoPor ? realizadoPor.trim() : null,
+            observacoes: observacoes ? observacoes.trim() : null,
+            dataRegistro: new Date()
+        };
+        const result = await db.collection('checklists').insertOne(novoChecklist);
+
+        // Atualizar veículo com data do último checklist e recalcular próximo
+        let updateVeiculoFields = {
+            'manutencaoInfo.ultimoChecklistData': novoChecklist.dataRealizacao
+        };
+        if (novoChecklist.quilometragem > veiculo.quilometragemAtual) {
+            updateVeiculoFields.quilometragemAtual = novoChecklist.quilometragem;
+        }
+        if (veiculo.manutencaoInfo && veiculo.manutencaoInfo.frequenciaChecklistDias) {
+            const freqDias = parseInt(veiculo.manutencaoInfo.frequenciaChecklistDias, 10);
+            if (freqDias > 0) {
+                updateVeiculoFields['manutencaoInfo.dataProxChecklist'] = new Date(new Date(novoChecklist.dataRealizacao).setDate(new Date(novoChecklist.dataRealizacao).getDate() + freqDias));
+            }
+        }
+        await db.collection('veiculos').updateOne({ _id: new ObjectId(veiculoId) }, { $set: updateVeiculoFields });
+
+        res.status(201).json({ message: 'Checklist registrado com sucesso!', checklist: { _id: result.insertedId, ...novoChecklist } });
+    } catch (error) {
+        console.error('Erro ao registrar checklist:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar registrar checklist.' });
+    }
+});
+
+// DELETE /api/checklists/:id
+app.delete('/api/checklists/:id', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID inválido." });
+    try {
+        const result = await db.collection('checklists').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) return res.status(404).json({ message: "Checklist não encontrado." });
+        res.status(200).json({ message: "Checklist excluído com sucesso." });
+    } catch (error) {
+        console.error('Erro ao excluir checklist:', error);
+        res.status(500).json({ message: 'Erro ao excluir checklist.' });
+    }
+});
+
+
+// --- NOVAS ROTAS DA API PARA ABASTECIMENTOS ---
+app.post('/api/abastecimentos', simpleAuthCheck, async (req, res) => {
     if (!db) {
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
     }
 
-    const { veiculoId, veiculoPlaca, tipoManutencao, dataRealizacao, custo, descricao, quilometragem, realizadaPor } = req.body;
+    const { veiculoId, veiculoPlaca, data, quilometragemAtual, litros, valorPorLitro, custoTotal, posto, observacoes } = req.body;
 
-    if (!veiculoId || !veiculoPlaca || !tipoManutencao || !dataRealizacao) {
-        return res.status(400).json({ message: 'Campos obrigatórios: veiculoId, veiculoPlaca, tipoManutencao e dataRealizacao.' });
+    // Validação básica
+    if (!veiculoId || !data || !quilometragemAtual || !litros || !valorPorLitro) {
+        return res.status(400).json({ message: "Campos obrigatórios: Veículo, Data, Quilometragem, Litros e Valor por Litro." });
     }
-
     if (!ObjectId.isValid(veiculoId)) {
         return res.status(400).json({ message: "ID do veículo inválido." });
     }
 
-    try {
-        const manutencoesCollection = db.collection('manutencoes');
-        const veiculosCollection = db.collection('veiculos');
+    const parsedQuilometragem = parseInt(quilometragemAtual, 10);
+    const parsedLitros = parseFloat(litros);
+    const parsedValorPorLitro = parseFloat(valorPorLitro);
+    let parsedCustoTotal = custoTotal ? parseFloat(custoTotal) : (parsedLitros * parsedValorPorLitro);
 
-        // Opcional: Verificar se o veiculoId realmente existe
-        const veiculoExiste = await veiculosCollection.findOne({ _id: new ObjectId(veiculoId) });
-        if (!veiculoExiste) {
+    if (isNaN(parsedQuilometragem) || parsedQuilometragem < 0 ||
+        isNaN(parsedLitros) || parsedLitros <= 0 ||
+        isNaN(parsedValorPorLitro) || parsedValorPorLitro <= 0 ||
+        isNaN(parsedCustoTotal) || parsedCustoTotal <= 0) {
+        return res.status(400).json({ message: "Valores numéricos inválidos para abastecimento." });
+    }
+
+    try {
+        const veiculosCollection = db.collection('veiculos');
+        const abastecimentosCollection = db.collection('abastecimentos');
+
+        // 1. Buscar o veículo para verificar a quilometragem e pegar informações de manutenção
+        const veiculo = await veiculosCollection.findOne({ _id: new ObjectId(veiculoId) });
+        if (!veiculo) {
             return res.status(404).json({ message: "Veículo não encontrado." });
         }
+        if (parsedQuilometragem < veiculo.quilometragemAtual) {
+            return res.status(400).json({ message: `Quilometragem informada (${parsedQuilometragem.toLocaleString('pt-BR')}km) é menor que a última registrada para o veículo (${veiculo.quilometragemAtual.toLocaleString('pt-BR')}km).` });
+        }
 
-        const novaManutencao = {
+        // 2. Salvar o registro de abastecimento
+        const novoAbastecimento = {
             veiculoId: new ObjectId(veiculoId),
-            veiculoPlaca: veiculoPlaca.toUpperCase().replace(/[^A-Z0-9]/g, ''),
-            tipoManutencao: tipoManutencao.trim(),
-            dataRealizacao: new Date(dataRealizacao),
-            custo: custo ? parseFloat(custo) : null,
-            descricao: descricao ? descricao.trim() : null,
-            quilometragem: quilometragem ? parseInt(quilometragem, 10) : null,
-            realizadaPor: realizadaPor ? realizadaPor.trim() : null,
+            veiculoPlaca: veiculo.placa, // Pegar a placa do veículo no DB para consistência
+            data: new Date(data),
+            quilometragemAtual: parsedQuilometragem,
+            litros: parsedLitros,
+            valorPorLitro: parsedValorPorLitro,
+            custoTotal: parsedCustoTotal,
+            posto: posto ? posto.trim() : null,
+            observacoes: observacoes ? observacoes.trim() : null,
             dataRegistro: new Date()
         };
+        const resultAbastecimento = await abastecimentosCollection.insertOne(novoAbastecimento);
 
-        const result = await manutencoesCollection.insertOne(novaManutencao);
+        // 3. Atualizar a quilometragem atual do veículo
+        await veiculosCollection.updateOne(
+            { _id: new ObjectId(veiculoId) },
+            { $set: { quilometragemAtual: parsedQuilometragem } }
+        );
 
-        // Lógica para ATUALIZAR a manutencaoInfo no documento do VEÍCULO após registrar uma manutenção
-        // Por exemplo, se for uma troca de óleo, atualize proxTrocaOleoKm e proxTrocaOleoData no veículo
-        // Esta lógica é mais complexa e depende das suas regras de negócio.
-        // Exemplo simplificado para troca de óleo:
-        if (tipoManutencao.toLowerCase().includes('óleo') && quilometragem) {
-            // Assumindo que a próxima troca será daqui a X km ou Y tempo.
-            // Para ser preciso, você precisaria do KM da última troca e adicionar o intervalo.
-            // Ou o frontend envia o 'proxTrocaOleoKm' e 'proxTrocaOleoData' já calculados.
-            await veiculosCollection.updateOne(
-                { _id: new ObjectId(veiculoId) },
-                {
-                    $set: {
-                        'manutencaoInfo.ultimaTrocaOleoKm': quilometragem,
-                        'manutencaoInfo.ultimaTrocaOleoData': new Date(dataRealizacao),
-                        // Você precisaria calcular proxTrocaOleoKm e proxTrocaOleoData com base na frequência definida
-                        // Ou receber esses dados já calculados do frontend para update.
-                        // Exemplo (se a regra for +10.000km da última troca):
-                        // 'manutencaoInfo.proxTrocaOleoKm': quilometragem + 10000,
-                        // 'manutencaoInfo.proxTrocaOleoData': new Date(new Date(dataRealizacao).setMonth(new Date(dataRealizacao).getMonth() + 6)), // 6 meses
-                    }
-                }
-            );
+        // 4. --- LÓGICA DE ALERTA DE ÓLEO ---
+        let alertaOleoMsg = null;
+        if (veiculo.manutencaoInfo && veiculo.manutencaoInfo.proxTrocaOleoKm) {
+            if (parsedQuilometragem >= veiculo.manutencaoInfo.proxTrocaOleoKm) {
+                alertaOleoMsg = `Atenção: Troca de óleo recomendada! KM atual (${parsedQuilometragem.toLocaleString('pt-BR')}km) atingiu ou ultrapassou o limite para troca (${veiculo.manutencaoInfo.proxTrocaOleoKm.toLocaleString('pt-BR')}km).`;
+                console.log(`ALERTA DE ÓLEO para ${veiculo.placa}: ${alertaOleoMsg}`);
+            }
         }
-        // Similar para checklist: se um checklist for realizado, atualize dataProxChecklist
 
-        console.log('Nova manutenção registrada:', novaManutencao.tipoManutencao, 'para veículo:', novaManutencao.veiculoPlaca, 'ID:', result.insertedId);
         res.status(201).json({
-            message: 'Manutenção registrada com sucesso!',
-            manutencao: { _id: result.insertedId, ...novaManutencao }
+            message: 'Abastecimento registrado com sucesso!',
+            abastecimento: { _id: resultAbastecimento.insertedId, ...novoAbastecimento },
+            alertaOleo: alertaOleoMsg // Envia a mensagem de alerta (pode ser null)
         });
 
     } catch (error) {
-        console.error('Erro ao registrar manutenção:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar registrar manutenção.' });
+        console.error('Erro ao registrar abastecimento:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar registrar abastecimento.' });
     }
 });
 
-// DELETE /api/manutencoes/:id - Excluir uma manutenção
-app.delete('/api/manutencoes/:id', simpleAuthCheck, async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
-
-    const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "ID de manutenção inválido." });
-    }
-
-    try {
-        const manutencoesCollection = db.collection('manutencoes');
-        const result = await manutencoesCollection.deleteOne({ _id: new ObjectId(id) });
-
-        if (result.deletedCount === 0) {
-            console.log('Tentativa de exclusão: Manutenção com ID não encontrada ->', id);
-            return res.status(404).json({ message: "Manutenção não encontrada para exclusão." });
-        }
-
-        console.log('Manutenção excluída com sucesso. ID:', id);
-        res.status(200).json({ message: "Manutenção excluída com sucesso.", id: id });
-
-    } catch (error) {
-        console.error('Erro ao excluir manutenção:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar excluir manutenção.' });
-    }
-});
 
 // --- Iniciar o servidor APÓS conectar ao DB ---
 async function startServer() {
