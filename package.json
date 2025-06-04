@@ -13,5 +13,9 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.17.1"
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.17.1", // Ou versão mais recente
+    "mongodb": "^6.5.0"   // Ou versão mais recente que você instalou
   }
 }
