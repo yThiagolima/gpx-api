@@ -2,25 +2,22 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const bcrypt = require('bcryptjs');
-// const jwt = require('jsonwebtoken'); // Adicionaremos JWT em uma etapa futura
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-// const JWT_SECRET = process.env.JWT_SECRET; // Para JWT, em uma etapa futura
 
 // --- Configuração do MongoDB ---
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) {
     console.error("ERRO FATAL: MONGODB_URI não está definida nas variáveis de ambiente.");
-    process.exit(1); // Encerra o processo se a URI não estiver definida
+    process.exit(1);
 }
 
 const client = new MongoClient(mongoUri, {
     serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true }
 });
-let db; // Variável para a instância do banco de dados
+let db;
 
-// Função para conectar ao MongoDB
 async function connectDB() {
     try {
         await client.connect();
@@ -28,20 +25,20 @@ async function connectDB() {
         console.log("Conectado com sucesso ao MongoDB! 🥭");
     } catch (err) {
         console.error("Falha ao conectar com o MongoDB ❌", err);
-        process.exit(1); // Encerra o processo se não conseguir conectar
+        process.exit(1);
     }
 }
 
 // --- Middlewares ---
-app.use(cors()); // Habilita CORS para todas as origens
-app.use(express.json()); // Permite que o servidor entenda requisições com corpo em JSON
+app.use(cors());
+app.use(express.json());
 
 // --- Rotas ---
 app.get('/', (req, res) => {
     res.send('🎉 Backend GPX7 v2 está funcionando e conectado ao MongoDB! 🎉');
 });
 
-// --- Rota de REGISTRO (ATUALIZADA) ---
+// --- Rota de REGISTRO ---
 app.post('/register', async (req, res) => {
     if (!db) {
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
@@ -49,7 +46,6 @@ app.post('/register', async (req, res) => {
 
     const { username, email, password } = req.body;
 
-    // Validação dos campos recebidos
     if (!username || !email || !password) {
         return res.status(400).json({ message: 'Nome de usuário, email e senha são obrigatórios.' });
     }
@@ -79,10 +75,10 @@ app.post('/register', async (req, res) => {
         });
 
         if (existingUser) {
-            if (existingUser.username === usernameInputLower) { // Assumindo que username no DB também é salvo/comparado em minúsculas
+            if (existingUser.username === usernameInputLower) {
                 return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
             }
-            if (existingUser.email === emailInputLower) { // Email no DB é salvo em minúsculas
+            if (existingUser.email === emailInputLower) {
                 return res.status(409).json({ message: 'Este email já está cadastrado.' });
             }
         }
@@ -91,8 +87,8 @@ app.post('/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         const newUser = {
-            username: username, // Ou usernameInputLower para consistência ao salvar
-            email: emailInputLower, // Salva email sempre em minúsculas
+            username: username, // Ou usernameInputLower para salvar sempre em minúsculas
+            email: emailInputLower,
             password: hashedPassword,
             createdAt: new Date()
         };
@@ -110,7 +106,7 @@ app.post('/register', async (req, res) => {
     }
 });
 
-// --- Rota de LOGIN (ATUALIZADA - USA O BANCO DE DADOS) ---
+// --- Rota de LOGIN ---
 app.post('/login', async (req, res) => {
     if (!db) {
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
@@ -128,8 +124,8 @@ app.post('/login', async (req, res) => {
         
         const user = await usersCollection.findOne({
             $or: [
-                { username: loginIdentifierLower }, // Assumindo que username no DB é comparado/salvo em minúsculas para login
-                { email: loginIdentifierLower }    // Email no DB é sempre minúsculo
+                { username: loginIdentifierLower }, // Assumindo que username no DB é comparado/salvo em minúsculas
+                { email: loginIdentifierLower }
             ]
         });
 
@@ -153,8 +149,6 @@ app.post('/login', async (req, res) => {
                 username: user.username,
                 email: user.email
             }
-            // Futuramente, adicionaremos o token JWT aqui
-            // token: "SEU_TOKEN_JWT_AQUI" 
         });
 
     } catch (error) {
@@ -163,20 +157,15 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// --- ROTAS DA API PARA A DASHBOARD (MOCKADAS POR ENQUANTO) ---
-
-// Middleware de autenticação (MUITO SIMPLES - SÓ PARA EXEMPLO, USAREMOS JWT REAL DEPOIS)
+// --- Middleware de Autenticação Placeholder ---
 const simpleAuthCheck = (req, res, next) => {
-    console.log("Middleware simpleAuthCheck: Por enquanto, permitindo acesso sem token (APENAS PARA DESENVOLVIMENTO).");
-    // Futuramente, este middleware verificará um token JWT.
-    // Por agora, ele permite que a requisição prossiga.
+    console.log("Middleware simpleAuthCheck: Permitindo acesso (APENAS PARA DESENVOLVIMENTO).");
     next(); 
 };
 
-// Rota para buscar estatísticas da dashboard
+// --- ROTAS DA API PARA A DASHBOARD (MOCKADAS) ---
 app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => {
     console.log('Requisição recebida em /api/dashboard/stats');
-    // Futuramente, buscaria dados reais do MongoDB
     const mockStats = {
         totalVeiculos: Math.floor(Math.random() * 50) + 5,
         alertasAtivos: Math.floor(Math.random() * 10),
@@ -185,10 +174,8 @@ app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => {
     res.json(mockStats);
 });
 
-// Rota para buscar atividade recente da dashboard
 app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
     console.log('Requisição recebida em /api/dashboard/recent-activity');
-    // Futuramente, buscaria dados reais do MongoDB
     const mockActivity = [
         { id: 1, tipo: 'abastecimento', descricao: 'Abastecimento veículo Placa XYZ-1234 (R$ 150,00)', data: new Date(Date.now() - 1 * 60 * 60 * 1000) },
         { id: 2, tipo: 'manutencao', descricao: 'Manutenção preventiva VW Gol (Placa ABC-4321) concluída.', data: new Date(Date.now() - 5 * 60 * 60 * 1000) },
@@ -197,6 +184,83 @@ app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
     ];
     res.json(mockActivity);
 });
+
+// --- ROTAS DA API PARA VEÍCULOS ---
+// POST /api/veiculos - Cadastrar um novo veículo
+app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
+    if (!db) {
+        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
+    }
+
+    const { 
+        placa, marca, modelo, anoFabricacao, anoModelo, cor, 
+        chassi, renavam, quilometragemAtual, oleoKm, oleoData, frequenciaChecklist 
+    } = req.body;
+
+    if (!placa || !marca || !modelo || !anoFabricacao || !anoModelo || !quilometragemAtual) {
+        return res.status(400).json({ 
+            message: "Campos obrigatórios não preenchidos: Placa, Marca, Modelo, Ano Fabricação, Ano Modelo, Quilometragem Atual." 
+        });
+    }
+    if (typeof quilometragemAtual !== 'number' || quilometragemAtual < 0) { // Garante que é número
+        return res.status(400).json({ message: "Quilometragem atual inválida." });
+    }    
+    if (anoFabricacao && (typeof anoFabricacao !== 'number' || anoFabricacao < 1900 || anoFabricacao > new Date().getFullYear() + 2)) {
+        return res.status(400).json({ message: "Ano de fabricação inválido." });
+    }
+    if (anoModelo && (typeof anoModelo !== 'number' || anoModelo < 1900 || anoModelo > new Date().getFullYear() + 2)) {
+        return res.status(400).json({ message: "Ano do modelo inválido." });
+    }
+    // Adicionar mais validações conforme necessário
+
+    try {
+        const veiculosCollection = db.collection('veiculos');
+        const placaUpper = placa.toUpperCase().replace(/-/g, ''); // Remove hífens e converte para maiúsculas
+
+        const existingVeiculo = await veiculosCollection.findOne({ placa: placaUpper });
+        if (existingVeiculo) {
+            return res.status(409).json({ message: `Veículo com a placa ${placaUpper} já cadastrado.` });
+        }
+
+        const novoVeiculo = {
+            placa: placaUpper,
+            marca,
+            modelo,
+            anoFabricacao: parseInt(anoFabricacao),
+            anoModelo: parseInt(anoModelo),
+            cor: cor || null,
+            chassi: chassi || null,
+            renavam: renavam || null,
+            quilometragemAtual: parseInt(quilometragemAtual),
+            manutencaoInfo: {
+                proxTrocaOleoKm: oleoKm ? parseInt(oleoKm) : null,
+                proxTrocaOleoData: oleoData ? new Date(oleoData) : null,
+                frequenciaChecklistDias: frequenciaChecklist ? parseInt(frequenciaChecklist) : null,
+                // Calcula próxima data do checklist apenas se frequenciaChecklist for fornecido
+                dataProxChecklist: frequenciaChecklist && parseInt(frequenciaChecklist) > 0 ? 
+                                   new Date(Date.now() + parseInt(frequenciaChecklist) * 24 * 60 * 60 * 1000) : null
+            },
+            dataCadastro: new Date(),
+            // userId: req.user.userId // Adicionar quando JWT estiver implementado
+        };
+
+        const result = await veiculosCollection.insertOne(novoVeiculo);
+        console.log('Novo veículo cadastrado:', novoVeiculo.placa, 'ID:', result.insertedId);
+        
+        res.status(201).json({ 
+            message: 'Veículo cadastrado com sucesso!', 
+            veiculo: { id: result.insertedId, ...novoVeiculo } 
+        });
+
+    } catch (error) {
+        console.error('Erro ao cadastrar veículo:', error);
+        if (error.code === 11000) {
+            return res.status(409).json({ message: `Erro: Dados duplicados (ex: placa ou chassi já existe).` });
+        }
+        res.status(500).json({ message: 'Erro interno ao tentar cadastrar veículo.' });
+    }
+});
+
 
 // --- Iniciar o servidor APÓS conectar ao DB ---
 async function startServer() {
@@ -209,4 +273,4 @@ async function startServer() {
     });
 }
 
-startServer(); // Chama a função para iniciar o servidor
+startServer();
