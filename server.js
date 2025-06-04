@@ -21,7 +21,7 @@ let db;
 async function connectDB() {
     try {
         await client.connect();
-        db = client.db("GPX7_DB"); // Certifique-se que "GPX7_DB" é o nome do seu banco na URI
+        db = client.db("GPX7_DB"); 
         console.log("Conectado com sucesso ao MongoDB! 🥭");
     } catch (err) {
         console.error("Falha ao conectar com o MongoDB ❌", err);
@@ -60,57 +60,43 @@ app.get('/', (req, res) => {
 
 // --- Rota de REGISTRO ---
 app.post('/register', async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
-    }
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { username, email, password } = req.body;
-    if (!username || !email || !password) return res.status(400).json({ message: 'Nome de usuário, email e senha são obrigatórios.' });
+    if (!username || !email || !password) return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     if (username.length < 3) return res.status(400).json({ message: 'Nome de usuário deve ter pelo menos 3 caracteres.' });
     if (password.length < 6) return res.status(400).json({ message: 'A senha deve ter pelo menos 6 caracteres.' });
-    if (!/^[a-zA-Z0-9_.-]+$/.test(username)) return res.status(400).json({ message: 'Nome de usuário deve conter apenas letras, números e os caracteres "_", ".", "-".' });
-    if (!/\S+@\S+\.\S+/.test(email)) return res.status(400).json({ message: 'Formato de email inválido.' });
+    if (!/^[a-zA-Z0-9_.-]+$/.test(username)) return res.status(400).json({ message: 'Nome de usuário inválido.' });
+    if (!/\S+@\S+\.\S+/.test(email)) return res.status(400).json({ message: 'Email inválido.' });
     try {
         const usersCollection = db.collection('users');
         const usernameInputLower = username.toLowerCase();
         const emailInputLower = email.toLowerCase();
         const existingUser = await usersCollection.findOne({ $or: [{ username: usernameInputLower }, { email: emailInputLower }] });
         if (existingUser) {
-            if (existingUser.username === usernameInputLower) return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
-            if (existingUser.email === emailInputLower) return res.status(409).json({ message: 'Este email já está cadastrado.' });
+            if (existingUser.username === usernameInputLower) return res.status(409).json({ message: 'Nome de usuário já em uso.' });
+            if (existingUser.email === emailInputLower) return res.status(409).json({ message: 'Email já cadastrado.' });
         }
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-        const newUser = { username: username, email: emailInputLower, password: hashedPassword, createdAt: new Date() };
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = { username, email: emailInputLower, password: hashedPassword, createdAt: new Date() };
         const result = await usersCollection.insertOne(newUser);
-        console.log('Novo usuário registrado:', newUser.username, 'Email:', newUser.email, 'ID:', result.insertedId);
-        res.status(201).json({ message: 'Usuário registrado com sucesso!', user: { id: result.insertedId, username: newUser.username, email: newUser.email } });
-    } catch (error) {
-        console.error('Erro ao registrar usuário:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar registrar usuário.' });
-    }
+        res.status(201).json({ message: 'Usuário registrado!', user: { id: result.insertedId, username, email } });
+    } catch (error) { res.status(500).json({ message: 'Erro ao registrar.' }); }
 });
 
 // --- Rota de LOGIN ---
 app.post('/login', async (req, res) => {
-    if (!db) { return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." }); }
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { loginIdentifier, password } = req.body;
-    if (!loginIdentifier || !password) { return res.status(400).json({ message: 'Identificador de login (usuário/email) e senha são obrigatórios.' }); }
+    if (!loginIdentifier || !password) return res.status(400).json({ message: 'Campos obrigatórios.' });
     try {
         const usersCollection = db.collection('users');
         const loginIdentifierLower = loginIdentifier.toLowerCase();
         const user = await usersCollection.findOne({ $or: [{ username: { $regex: new RegExp(`^${loginIdentifierLower}$`, 'i') } }, { email: loginIdentifierLower }] });
-        if (!user) { return res.status(401).json({ message: 'Credenciais inválidas.' }); }
-        const isPasswordMatch = await bcrypt.compare(password, user.password);
-        if (!isPasswordMatch) { return res.status(401).json({ message: 'Credenciais inválidas.' }); }
-        console.log('Login bem-sucedido para:', user.username);
+        if (!user || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ message: 'Credenciais inválidas.' });
         res.status(200).json({ message: 'Login bem-sucedido!', user: { id: user._id, username: user.username, email: user.email } });
-    } catch (error) {
-        console.error('Erro durante o login:', error);
-        res.status(500).json({ message: 'Erro interno ao tentar fazer login.' });
-    }
+    } catch (error) { res.status(500).json({ message: 'Erro no login.' }); }
 });
 
-// --- Middleware de Autenticação Placeholder ---
 const simpleAuthCheck = (req, res, next) => { next(); };
 
 // --- ROTAS DA API PARA A DASHBOARD ---
@@ -118,9 +104,7 @@ app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
     try {
         const totalVeiculos = await db.collection('veiculos').countDocuments();
-        const hoje = new Date();
         const inicioHoje = new Date(new Date().setUTCHours(0, 0, 0, 0)); 
-
         const veiculosParaAlerta = await db.collection('veiculos').find({
             $or: [
                 { 'manutencaoInfo.proxTrocaOleoData': { $exists: true, $ne: null } },
@@ -128,47 +112,36 @@ app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => {
                 { 'manutencaoInfo.dataProxChecklist': { $exists: true, $ne: null } }
             ]
         }).toArray();
-        let alertasAtivosCount = 0;
-        let manutencoesAgendadasCount = 0;
-
+        let alertasAtivosCount = 0, manutencoesAgendadasCount = 0;
         veiculosParaAlerta.forEach(v => {
-            let alertaVencidoEsteVeiculo = false;
-            let agendamentoFuturoEsteVeiculo = false;
+            let alertaVencido = false, agendamentoFuturo = false;
             if (v.manutencaoInfo) {
-                if (v.manutencaoInfo.proxTrocaOleoData) {
-                    const dataOleo = new Date(v.manutencaoInfo.proxTrocaOleoData);
-                    if (dataOleo < inicioHoje) alertaVencidoEsteVeiculo = true; else agendamentoFuturoEsteVeiculo = true;
-                }
-                if (!alertaVencidoEsteVeiculo && v.manutencaoInfo.proxTrocaOleoKm && v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) {
-                    alertaVencidoEsteVeiculo = true; // Mesmo que a data seja futura, se o KM já passou, é alerta.
-                }
-                if (v.manutencaoInfo.dataProxChecklist) {
-                    const dataCheck = new Date(v.manutencaoInfo.dataProxChecklist);
-                    if (dataCheck < inicioHoje) alertaVencidoEsteVeiculo = true; else agendamentoFuturoEsteVeiculo = true;
-                }
+                if (v.manutencaoInfo.proxTrocaOleoData) { const d = new Date(v.manutencaoInfo.proxTrocaOleoData); if (d < inicioHoje) alertaVencido = true; else agendamentoFuturo = true; }
+                if (!alertaVencido && v.manutencaoInfo.proxTrocaOleoKm && v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) alertaVencido = true;
+                if (v.manutencaoInfo.dataProxChecklist) { const d = new Date(v.manutencaoInfo.dataProxChecklist); if (d < inicioHoje) alertaVencido = true; else agendamentoFuturo = true; }
             }
-            if (alertaVencidoEsteVeiculo) alertasAtivosCount++;
-            else if (agendamentoFuturoEsteVeiculo) manutencoesAgendadasCount++;
+            if (alertaVencido) alertasAtivosCount++; else if (agendamentoFuturo) manutencoesAgendadasCount++;
         });
-        
         res.json({ totalVeiculos, alertasAtivos: alertasAtivosCount, manutencoesAgendadas: manutencoesAgendadasCount });
-    } catch (error) { console.error("Erro em /api/dashboard/stats:", error); res.status(500).json({ message: "Erro ao buscar estatísticas."}); }
+    } catch (error) { res.status(500).json({ message: "Erro stats." }); }
 });
-
 app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
     try {
-        const manutencoesPromise = db.collection('manutencoes').find().sort({ dataRealizacao: -1 }).limit(5).project({ _id: 1, veiculoPlaca: 1, tipoManutencao: 1, dataRealizacao: 1 }).toArray();
-        const checklistsPromise = db.collection('checklists').find({status: "concluido"}).sort({ dataRealizacao: -1 }).limit(5).project({ _id: 1, veiculoPlaca: 1, realizadoPor: 1, dataRealizacao: 1, observacoesGerais: 1 }).toArray();
-        const abastecimentosPromise = db.collection('abastecimentos').find().sort({ data: -1 }).limit(5).project({ _id: 1, veiculoPlaca: 1, litros: 1, data: 1 }).toArray();
-        const [manutencoesRecentes, checklistsRecentes, abastecimentosRecentes] = await Promise.all([manutencoesPromise, checklistsPromise, abastecimentosPromise]);
-        let activities = [];
-        manutencoesRecentes.forEach(m => activities.push({ id: m._id, tipo: 'manutencao', descricao: `Manutenção (${m.tipoManutencao || 'Geral'}) ${m.veiculoPlaca || ''}`, data: m.dataRealizacao }));
-        checklistsRecentes.forEach(c => activities.push({ id: c._id, tipo: 'checklist', descricao: `Checklist ${c.veiculoPlaca || ''} por ${c.realizadoPor || 'N/A'}. ${c.observacoesGerais || ''}`, data: c.dataRealizacao }));
-        abastecimentosRecentes.forEach(a => activities.push({ id: a._id, tipo: 'abastecimento', descricao: `Abastecimento ${a.veiculoPlaca || ''} (${a.litros.toFixed(1)}L)`, data: a.data }));
+        const proms = [
+            db.collection('manutencoes').find().sort({ dataRealizacao: -1 }).limit(5).project({ _id: 1, veiculoPlaca: 1, tipoManutencao: 1, dataRealizacao: 1 }).toArray(),
+            db.collection('checklists').find({status: "concluido"}).sort({ dataRealizacao: -1 }).limit(5).project({ _id: 1, veiculoPlaca: 1, realizadoPor: 1, dataRealizacao: 1, observacoesGerais: 1 }).toArray(),
+            db.collection('abastecimentos').find().sort({ data: -1 }).limit(5).project({ _id: 1, veiculoPlaca: 1, litros: 1, data: 1 }).toArray()
+        ];
+        const [manutencoes, checklists, abastecimentos] = await Promise.all(proms);
+        let activities = [
+            ...manutencoes.map(m => ({ id: m._id, tipo: 'manutencao', descricao: `Manutenção (${m.tipoManutencao||'Geral'}) ${m.veiculoPlaca||''}`, data: m.dataRealizacao })),
+            ...checklists.map(c => ({ id: c._id, tipo: 'checklist', descricao: `Checklist ${c.veiculoPlaca||''} por ${c.realizadoPor||'N/A'}. ${c.observacoesGerais||''}`, data: c.dataRealizacao })),
+            ...abastecimentos.map(a => ({ id: a._id, tipo: 'abastecimento', descricao: `Abastecimento ${a.veiculoPlaca||''} (${a.litros.toFixed(1)}L)`, data: a.data }))
+        ];
         activities.sort((a, b) => new Date(b.data) - new Date(a.data));
         res.json(activities.slice(0, 5));
-    } catch (error) { console.error("Erro em /api/dashboard/recent-activity:", error); res.status(500).json({ message: "Erro ao buscar atividades."}); }
+    } catch (error) { res.status(500).json({ message: "Erro recent activity."}); }
 });
 
 // --- ROTAS DA API PARA VEÍCULOS ---
@@ -382,16 +355,51 @@ app.delete('/api/manutencoes/:id', simpleAuthCheck, async (req, res) => {
 });
 
 // --- ROTAS DA API PARA CHECKLISTS ---
-app.post('/api/checklists/iniciar', simpleAuthCheck, async (req, res) => {
+app.post('/api/checklists/iniciar', simpleAuthCheck, async (req, res) => { // ROTA ATUALIZADA
     if (!db) return res.status(500).json({ message: "DB não conectado." });
-    const { veiculoId } = req.body; if (!veiculoId || !ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID veículo inválido." });
+    const { veiculoId } = req.body;
+    if (!veiculoId || !ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID do veículo inválido." });
+
     try {
         const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
         if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
-        const novoChecklist = { veiculoId: new ObjectId(veiculoId), veiculoPlaca: veiculo.placa, dataIniciado: new Date(), status: "pendente", itensVerificados: [], dataRealizacao: null, quilometragem: null, realizadoPor: null, observacoesGerais: null };
-        const result = await db.collection('checklists').insertOne(novoChecklist);
-        res.status(201).json({ message: 'Checklist iniciado!', checklist: { _id: result.insertedId, ...novoChecklist }});
-    } catch (error) { console.error("Erro iniciar checklist:", error); res.status(500).json({ message: "Erro iniciar checklist." }); }
+
+        const dataDeInicio = new Date(); // Usar a data atual para o início
+
+        const novoChecklistPendente = {
+            veiculoId: new ObjectId(veiculoId),
+            veiculoPlaca: veiculo.placa,
+            dataIniciado: dataDeInicio,
+            status: "pendente", 
+            itensVerificados: [], 
+            dataRealizacao: null,
+            quilometragem: null,
+            realizadoPor: null,
+            observacoesGerais: null
+        };
+        const result = await db.collection('checklists').insertOne(novoChecklistPendente);
+
+        // ATUALIZAÇÃO: Após iniciar um checklist, considerar a data de início como a "última realização"
+        // para que o agendamento original suma da lista de "próximos" até que este seja concluído.
+        let updateVeiculoFields = {
+            'manutencaoInfo.ultimoChecklistData': dataDeInicio // Data em que o checklist foi efetivamente "pego" para fazer
+        };
+        if (veiculo.manutencaoInfo && veiculo.manutencaoInfo.frequenciaChecklistDias) {
+            const freqDias = parseInt(veiculo.manutencaoInfo.frequenciaChecklistDias, 10);
+            if (freqDias > 0) {
+                updateVeiculoFields['manutencaoInfo.dataProxChecklist'] = new Date(new Date(dataDeInicio).setDate(dataDeInicio.getDate() + freqDias));
+            }
+        }
+        await db.collection('veiculos').updateOne({ _id: new ObjectId(veiculoId) }, { $set: updateVeiculoFields });
+
+        res.status(201).json({ 
+            message: 'Checklist iniciado e marcado como pendente! O agendamento original foi atualizado.', 
+            checklist: { _id: result.insertedId, ...novoChecklistPendente }
+        });
+    } catch (error) {
+        console.error("Erro ao iniciar checklist:", error);
+        res.status(500).json({ message: "Erro ao iniciar checklist." });
+    }
 });
 app.get('/api/checklists/pendentes', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
@@ -579,7 +587,6 @@ app.get('/api/relatorios/analise-combustivel', simpleAuthCheck, async (req, res)
         res.status(500).json({ message: "Erro analise combustivel." }); 
     }
 });
-
 
 // --- Iniciar o servidor APÓS conectar ao DB ---
 async function startServer() {
