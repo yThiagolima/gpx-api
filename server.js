@@ -87,7 +87,7 @@ app.post('/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         const newUser = {
-            username: username, // Ou usernameInputLower para salvar sempre em minúsculas
+            username: username, 
             email: emailInputLower,
             password: hashedPassword,
             createdAt: new Date()
@@ -124,7 +124,7 @@ app.post('/login', async (req, res) => {
         
         const user = await usersCollection.findOne({
             $or: [
-                { username: loginIdentifierLower }, // Assumindo que username no DB é comparado/salvo em minúsculas
+                { username: loginIdentifierLower }, 
                 { email: loginIdentifierLower }
             ]
         });
@@ -186,6 +186,25 @@ app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
 });
 
 // --- ROTAS DA API PARA VEÍCULOS ---
+
+// GET /api/veiculos - Listar todos os veículos
+app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
+    if (!db) {
+        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
+    }
+
+    try {
+        const veiculosCollection = db.collection('veiculos');
+        const veiculos = await veiculosCollection.find({}).sort({ dataCadastro: -1 }).toArray();
+
+        res.status(200).json(veiculos); // Retorna a lista de veículos (pode ser vazia)
+
+    } catch (error) {
+        console.error('Erro ao buscar veículos:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar buscar veículos.' });
+    }
+});
+
 // POST /api/veiculos - Cadastrar um novo veículo
 app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (!db) {
@@ -197,12 +216,12 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
         chassi, renavam, quilometragemAtual, oleoKm, oleoData, frequenciaChecklist 
     } = req.body;
 
-    if (!placa || !marca || !modelo || !anoFabricacao || !anoModelo || !quilometragemAtual) {
+    if (!placa || !marca || !modelo || !anoFabricacao || !anoModelo || quilometragemAtual === undefined || quilometragemAtual === null) {
         return res.status(400).json({ 
             message: "Campos obrigatórios não preenchidos: Placa, Marca, Modelo, Ano Fabricação, Ano Modelo, Quilometragem Atual." 
         });
     }
-    if (typeof quilometragemAtual !== 'number' || quilometragemAtual < 0) { // Garante que é número
+    if (typeof quilometragemAtual !== 'number' || quilometragemAtual < 0) {
         return res.status(400).json({ message: "Quilometragem atual inválida." });
     }    
     if (anoFabricacao && (typeof anoFabricacao !== 'number' || anoFabricacao < 1900 || anoFabricacao > new Date().getFullYear() + 2)) {
@@ -211,11 +230,10 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (anoModelo && (typeof anoModelo !== 'number' || anoModelo < 1900 || anoModelo > new Date().getFullYear() + 2)) {
         return res.status(400).json({ message: "Ano do modelo inválido." });
     }
-    // Adicionar mais validações conforme necessário
 
     try {
         const veiculosCollection = db.collection('veiculos');
-        const placaUpper = placa.toUpperCase().replace(/-/g, ''); // Remove hífens e converte para maiúsculas
+        const placaUpper = placa.toUpperCase().replace(/-/g, '');
 
         const existingVeiculo = await veiculosCollection.findOne({ placa: placaUpper });
         if (existingVeiculo) {
@@ -236,7 +254,6 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
                 proxTrocaOleoKm: oleoKm ? parseInt(oleoKm) : null,
                 proxTrocaOleoData: oleoData ? new Date(oleoData) : null,
                 frequenciaChecklistDias: frequenciaChecklist ? parseInt(frequenciaChecklist) : null,
-                // Calcula próxima data do checklist apenas se frequenciaChecklist for fornecido
                 dataProxChecklist: frequenciaChecklist && parseInt(frequenciaChecklist) > 0 ? 
                                    new Date(Date.now() + parseInt(frequenciaChecklist) * 24 * 60 * 60 * 1000) : null
             },
@@ -260,7 +277,6 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao tentar cadastrar veículo.' });
     }
 });
-
 
 // --- Iniciar o servidor APÓS conectar ao DB ---
 async function startServer() {
