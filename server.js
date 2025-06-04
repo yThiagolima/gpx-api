@@ -509,7 +509,62 @@ app.get('/api/manutencoes/historico', simpleAuthCheck, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar histórico de manutenções.' }); 
     }
 });
-app.delete('/api/checklists/:id', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+
+// --- ROTAS DA API PARA MANUTENÇÕES ---
+app.get('/api/manutencoes/proximas', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const veiculos = await db.collection('veiculos').find({}).toArray();
+        const inicioHoje = new Date(new Date().setUTCHours(0, 0, 0, 0)); 
+        const tresDiasDepois = new Date(new Date(inicioHoje).setUTCDate(inicioHoje.getUTCDate() + 3));
+        let eventosFuturosEAlertas = [];
+
+        veiculos.forEach(v => {
+            if (v.manutencaoInfo) {
+                let statusOleo = "OK"; let vencidoKmOleo = false; let vencidoDataOleo = false;
+                let dataOleoConsiderada = v.manutencaoInfo.proxTrocaOleoData ? new Date(v.manutencaoInfo.proxTrocaOleoData) : null;
+
+                if (v.manutencaoInfo.proxTrocaOleoKm && v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) vencidoKmOleo = true;
+                if (dataOleoConsiderada && dataOleoConsiderada < inicioHoje) vencidoDataOleo = true;
+
+                if (vencidoKmOleo && vencidoDataOleo) statusOleo = "VENCIDO_DATA_KM";
+                else if (vencidoKmOleo) statusOleo = "VENCIDO_KM";
+                else if (vencidoDataOleo) statusOleo = "VENCIDO_DATA";
+                
+                if (v.manutencaoInfo.proxTrocaOleoKm || dataOleoConsiderada ) {
+                     if (statusOleo !== "OK" || (dataOleoConsiderada && dataOleoConsiderada >= inicioHoje ) ) {
+                        eventosFuturosEAlertas.push({ _id: v._id.toString() + '_oleo', veiculoId: v._id.toString(), veiculoPlaca: v.placa, tipoEvento: 'OLEO',
+                            descricao: `Próxima troca de óleo.`,
+                            detalhes: `Data Prev.: ${dataOleoConsiderada ? dataOleoConsiderada.toLocaleDateString('pt-BR', {timeZone: 'UTC'}) : 'N/A'}. KM Prev.: ${v.manutencaoInfo.proxTrocaOleoKm ? v.manutencaoInfo.proxTrocaOleoKm.toLocaleString('pt-BR') : 'N/A'}. KM Atual: ${v.quilometragemAtual.toLocaleString('pt-BR')}.`,
+                            dataPrevista: v.manutencaoInfo.proxTrocaOleoData, kmPrevisto: v.manutencaoInfo.proxTrocaOleoKm, kmAtual: v.quilometragemAtual, statusAlerta: statusOleo 
+                        });
+                    }
+                }
+                let statusChecklist = "OK";
+                let dataCheckConsiderada = v.manutencaoInfo.dataProxChecklist ? new Date(v.manutencaoInfo.dataProxChecklist) : null;
+                if (dataCheckConsiderada) {
+                    if (dataCheckConsiderada < inicioHoje) statusChecklist = "VENCIDO_DATA";
+                    else if (dataCheckConsiderada >= inicioHoje && dataCheckConsiderada <= tresDiasDepois) statusChecklist = "AVISO_CHECKLIST";
+                     if (statusChecklist !== "OK" || dataCheckConsiderada >= inicioHoje) {
+                        eventosFuturosEAlertas.push({ _id: v._id.toString() + '_checklist', veiculoId: v._id.toString(), veiculoPlaca: v.placa, tipoEvento: 'CHECKLIST',
+                            descricao: `Próximo checklist periódico. Frequência: ${v.manutencaoInfo.frequenciaChecklistDias || 'N/A'} dias.`,
+                            detalhes: `Data Prevista: ${dataCheckConsiderada.toLocaleDateString('pt-BR', {timeZone: 'UTC'})}`,
+                            dataPrevista: v.manutencaoInfo.dataProxChecklist, statusAlerta: statusChecklist
+                        });
+                    }
+                }
+            }
+        });
+        eventosFuturosEAlertas.sort((a, b) => {
+            const pS = (s) => { if (s && s.startsWith("VENCIDO")) return 0; if (s === "AVISO_CHECKLIST") return 1; return 2; };
+            if (pS(a.statusAlerta) !== pS(b.statusAlerta)) return pS(a.statusAlerta) - pS(b.statusAlerta);
+            const dA = a.dataPrevista ? new Date(a.dataPrevista) : new Date(8640000000000000); 
+            const dB = b.dataPrevista ? new Date(b.dataPrevista) : new Date(8640000000000000);
+            return dA.getTime() - dB.getTime();
+        });
+        res.status(200).json(eventosFuturosEAlertas);
+    } catch (error) { console.error('Erro próximas manutenções:', error); res.status(500).json({ message: 'Erro próximas manutenções.' }); }
+});
 
 // --- ROTAS DA API PARA ABASTECIMENTOS ---
 // Esta rota será modificada no futuro para incluir a validação e uso da requisição
