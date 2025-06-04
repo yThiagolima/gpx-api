@@ -143,7 +143,6 @@ app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
         res.json(activities.slice(0, 5));
     } catch (error) { res.status(500).json({ message: "Erro recent activity."}); }
 });
-
 // --- ROTAS DA API PARA VEÍCULOS ---
 app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
@@ -252,109 +251,6 @@ app.put('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
 });
 
 // --- ROTAS DA API PARA MANUTENÇÕES ---
-app.get('/api/manutencoes/proximas', simpleAuthCheck, async (req, res) => {
-    if (!db) return res.status(500).json({ message: "DB não conectado." });
-    try {
-        const veiculos = await db.collection('veiculos').find({}).toArray();
-        const inicioHoje = new Date(new Date().setUTCHours(0, 0, 0, 0));
-        const tresDiasDepois = new Date(new Date(inicioHoje).setUTCDate(inicioHoje.getUTCDate() + 3));
-        let eventosFuturosEAlertas = [];
-
-        veiculos.forEach(v => {
-            if (v.manutencaoInfo) {
-                let statusOleo = "OK"; let vencidoKmOleo = false; let vencidoDataOleo = false;
-                let dataOleoConsiderada = v.manutencaoInfo.proxTrocaOleoData ? new Date(v.manutencaoInfo.proxTrocaOleoData) : null;
-                if (v.manutencaoInfo.proxTrocaOleoKm && v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) vencidoKmOleo = true;
-                if (dataOleoConsiderada && dataOleoConsiderada < inicioHoje) vencidoDataOleo = true;
-                if (vencidoKmOleo && vencidoDataOleo) statusOleo = "VENCIDO_DATA_KM";
-                else if (vencidoKmOleo) statusOleo = "VENCIDO_KM";
-                else if (vencidoDataOleo) statusOleo = "VENCIDO_DATA";
-                if (v.manutencaoInfo.proxTrocaOleoKm || dataOleoConsiderada ) {
-                     if (statusOleo !== "OK" || (dataOleoConsiderada && dataOleoConsiderada >= inicioHoje ) ) {
-                        eventosFuturosEAlertas.push({ _id: v._id.toString() + '_oleo', veiculoId: v._id.toString(), veiculoPlaca: v.placa, tipoEvento: 'OLEO',
-                            descricao: `Próxima troca de óleo.`,
-                            detalhes: `Data Prev.: ${dataOleoConsiderada ? dataOleoConsiderada.toLocaleDateString('pt-BR', {timeZone: 'UTC'}) : 'N/A'}. KM Prev.: ${v.manutencaoInfo.proxTrocaOleoKm ? v.manutencaoInfo.proxTrocaOleoKm.toLocaleString('pt-BR') : 'N/A'}. KM Atual: ${v.quilometragemAtual.toLocaleString('pt-BR')}.`,
-                            dataPrevista: v.manutencaoInfo.proxTrocaOleoData, kmPrevisto: v.manutencaoInfo.proxTrocaOleoKm, kmAtual: v.quilometragemAtual, statusAlerta: statusOleo 
-                        });
-                    }
-                }
-                let statusChecklist = "OK";
-                let dataCheckConsiderada = v.manutencaoInfo.dataProxChecklist ? new Date(v.manutencaoInfo.dataProxChecklist) : null;
-                if (dataCheckConsiderada) {
-                    if (dataCheckConsiderada < inicioHoje) statusChecklist = "VENCIDO_DATA";
-                    else if (dataCheckConsiderada >= inicioHoje && dataCheckConsiderada <= tresDiasDepois) statusChecklist = "AVISO_CHECKLIST";
-                     if (statusChecklist !== "OK" || dataCheckConsiderada >= inicioHoje) {
-                        eventosFuturosEAlertas.push({ _id: v._id.toString() + '_checklist', veiculoId: v._id.toString(), veiculoPlaca: v.placa, tipoEvento: 'CHECKLIST',
-                            descricao: `Próximo checklist periódico. Frequência: ${v.manutencaoInfo.frequenciaChecklistDias || 'N/A'} dias.`,
-                            detalhes: `Data Prevista: ${dataCheckConsiderada.toLocaleDateString('pt-BR', {timeZone: 'UTC'})}`,
-                            dataPrevista: v.manutencaoInfo.dataProxChecklist, statusAlerta: statusChecklist
-                        });
-                    }
-                }
-            }
-        });
-        eventosFuturosEAlertas.sort((a, b) => {
-            const pS = (s) => { if (s && s.startsWith("VENCIDO")) return 0; if (s === "AVISO_CHECKLIST") return 1; return 2; };
-            if (pS(a.statusAlerta) !== pS(b.statusAlerta)) return pS(a.statusAlerta) - pS(b.statusAlerta);
-            const dA = a.dataPrevista ? new Date(a.dataPrevista) : new Date(8640000000000000); 
-            const dB = b.dataPrevista ? new Date(b.dataPrevista) : new Date(8640000000000000);
-            return dA.getTime() - dB.getTime();
-        });
-        res.status(200).json(eventosFuturosEAlertas);
-    } catch (error) { console.error('Erro próximas manutenções:', error); res.status(500).json({ message: 'Erro próximas manutenções.' }); }
-});
-app.get('/api/manutencoes/historico', simpleAuthCheck, async (req, res) => {
-    if (!db) return res.status(500).json({ message: "DB não conectado." });
-    const { veiculoId, mes, ano } = req.query;
-    try {
-        let query = {};
-        if (veiculoId && veiculoId !== 'todos') { if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID Veículo inválido." }); query.veiculoId = new ObjectId(veiculoId); }
-        const dateFilter = getDateQuery(mes, ano); if (dateFilter.dateMatch) query.dataRealizacao = dateFilter.dateMatch;
-        const historico = await db.collection('manutencoes').find(query).sort({ dataRealizacao: -1, dataRegistro: -1 }).toArray();
-        res.status(200).json(historico);
-    } catch (error) { console.error('Erro histórico manutenções:', error); res.status(500).json({ message: 'Erro histórico manutenções.' }); }
-});
-app.post('/api/manutencoes', simpleAuthCheck, async (req, res) => {
-    if (!db) return res.status(500).json({ message: "DB não conectado." });
-    const { veiculoId, tipoManutencao, dataRealizacao, custo, descricao, quilometragem, realizadaPor, proxTrocaOleoKm, proxTrocaOleoData } = req.body;
-    if (!veiculoId || !tipoManutencao || !dataRealizacao || quilometragem === undefined) return res.status(400).json({ message: 'Campos obrigatórios.' });
-    if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID veículo inválido." });
-    try {
-        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
-        if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
-        const novaManutencao = {
-            veiculoId: new ObjectId(veiculoId), veiculoPlaca: veiculo.placa, tipoManutencao: tipoManutencao.trim(), 
-            dataRealizacao: new Date(Date.parse(dataRealizacao)), // Ajuste para parse de data
-            custo: custo ? parseFloat(custo) : null, descricao: descricao ? descricao.trim() : null,
-            quilometragem: quilometragem ? parseInt(quilometragem, 10) : null,
-            realizadaPor: realizadaPor ? realizadaPor.trim() : null, dataRegistro: new Date()
-        };
-        const result = await db.collection('manutencoes').insertOne(novaManutencao);
-        let updateFields = {}; const kmManut = novaManutencao.quilometragem;
-        if (kmManut && kmManut > (veiculo.quilometragemAtual || 0) ) updateFields.quilometragemAtual = kmManut;
-        if ((tipoManutencao.toLowerCase().includes('óleo') || tipoManutencao.toLowerCase().includes('oleo')) ) {
-            updateFields['manutencaoInfo.ultimaTrocaOleoData'] = novaManutencao.dataRealizacao;
-            if (kmManut) updateFields['manutencaoInfo.ultimaTrocaOleoKm'] = kmManut;
-            if (proxTrocaOleoKm !== undefined && proxTrocaOleoKm !== null && proxTrocaOleoKm !== '') updateFields['manutencaoInfo.proxTrocaOleoKm'] = parseInt(proxTrocaOleoKm, 10);
-            else if (proxTrocaOleoKm === '' || proxTrocaOleoKm === null) updateFields['manutencaoInfo.proxTrocaOleoKm'] = null;
-            if (proxTrocaOleoData !== undefined && proxTrocaOleoData !== null && proxTrocaOleoData !== '') updateFields['manutencaoInfo.proxTrocaOleoData'] = new Date(Date.parse(proxTrocaOleoData)); // Ajuste
-            else if (proxTrocaOleoData === '' || proxTrocaOleoData === null) updateFields['manutencaoInfo.proxTrocaOleoData'] = null;
-        }
-        if (Object.keys(updateFields).length > 0) await db.collection('veiculos').updateOne({ _id: new ObjectId(veiculoId) }, { $set: updateFields });
-        res.status(201).json({ message: 'Manutenção registrada!', manutencao: { _id: result.insertedId, ...novaManutencao } });
-    } catch (error) { console.error('Erro registrar manutenção:', error); res.status(500).json({ message: 'Erro registrar manutenção.' }); }
-});
-app.delete('/api/manutencoes/:id', simpleAuthCheck, async (req, res) => {
-    if (!db) return res.status(500).json({ message: "DB não conectado." });
-    const { id } = req.params; if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID inválido." });
-    try {
-        const result = await db.collection('manutencoes').deleteOne({ _id: new ObjectId(id) });
-        if (result.deletedCount === 0) return res.status(404).json({ message: "Manutenção não encontrada." });
-        res.status(200).json({ message: "Manutenção excluída.", id: id });
-    } catch (error) { console.error('Erro excluir manutenção:', error); res.status(500).json({ message: 'Erro excluir manutenção.' }); }
-});
-
-// --- ROTAS DA API PARA CHECKLISTS ---
 app.post('/api/checklists/iniciar', simpleAuthCheck, async (req, res) => { // ROTA ATUALIZADA
     if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { veiculoId } = req.body;
@@ -453,7 +349,15 @@ app.delete('/api/checklists/:id', simpleAuthCheck, async (req, res) => {
     } catch (error) { console.error('Erro excluir checklist:', error); res.status(500).json({ message: 'Erro excluir checklist.' }); }
 });
 
+// --- ROTAS DA API PARA CHECKLISTS ---
+app.post('/api/checklists/iniciar', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+app.get('/api/checklists/pendentes', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+app.post('/api/checklists/:id/registrar-resultado', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+app.get('/api/checklists/historico', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+app.delete('/api/checklists/:id', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+
 // --- ROTAS DA API PARA ABASTECIMENTOS ---
+// Esta rota será modificada no futuro para incluir a validação e uso da requisição
 app.post('/api/abastecimentos', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
     const { veiculoId, data, quilometragemAtual, litros, valorPorLitro, custoTotal, posto, observacoes } = req.body;
@@ -588,7 +492,110 @@ app.get('/api/relatorios/analise-combustivel', simpleAuthCheck, async (req, res)
     }
 });
 
-// --- Iniciar o servidor APÓS conectar ao DB ---
+
+// --- ROTAS DA API PARA REQUISIÇÕES ---
+app.post('/api/requisicoes', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { requisicaoId: requisicaoIdUsuario, entreguePara } = req.body; // Renomeado para clareza no backend
+
+    if (!requisicaoIdUsuario || !entreguePara) {
+        return res.status(400).json({ message: "ID da Requisição e 'Entregue Para' são obrigatórios." });
+    }
+
+    try {
+        const requisicoesCollection = db.collection('requisicoes');
+        // Verifica se o ID da requisição fornecido pelo usuário já existe
+        const existingRequisicao = await requisicoesCollection.findOne({ idRequisicaoUsuario: requisicaoIdUsuario.trim() });
+        if (existingRequisicao) {
+            return res.status(409).json({ message: `O ID de Requisição '${requisicaoIdUsuario}' já existe.` });
+        }
+
+        const novaRequisicao = {
+            idRequisicaoUsuario: requisicaoIdUsuario.trim(),
+            entreguePara: entreguePara.trim(),
+            dataCriacao: new Date(),
+            status: "disponivel", // Status inicial
+            abastecimentoIdAssociado: null,
+            dataUtilizacao: null
+        };
+        const result = await requisicoesCollection.insertOne(novaRequisicao);
+        res.status(201).json({ 
+            message: "Requisição cadastrada com sucesso!", 
+            requisicao: { _id: result.insertedId, ...novaRequisicao }
+        });
+    } catch (error) {
+        console.error("Erro ao cadastrar requisição:", error);
+        res.status(500).json({ message: "Erro interno ao cadastrar requisição." });
+    }
+});
+
+app.get('/api/requisicoes', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { status, search } = req.query;
+    
+    try {
+        let query = {};
+        if (status && status !== 'todas') {
+            query.status = status; // 'disponivel' ou 'utilizada'
+        }
+        if (search) {
+            const searchRegex = new RegExp(search, 'i');
+            query.$or = [
+                { idRequisicaoUsuario: searchRegex },
+                { entreguePara: searchRegex }
+            ];
+        }
+        const requisicoes = await db.collection('requisicoes').find(query).sort({ dataCriacao: -1 }).toArray();
+        res.status(200).json(requisicoes);
+    } catch (error) {
+        console.error("Erro ao listar requisições:", error);
+        res.status(500).json({ message: "Erro interno ao listar requisições." });
+    }
+});
+
+app.get('/api/requisicoes/disponiveis', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const disponiveis = await db.collection('requisicoes')
+            .find({ status: "disponivel" })
+            .sort({ dataCriacao: 1 }) // Mais antigas primeiro, talvez? Ou por ID.
+            .project({ idRequisicaoUsuario: 1, entreguePara: 1 }) // Retorna apenas o ID do usuário e para quem foi entregue
+            .toArray();
+        res.status(200).json(disponiveis);
+    } catch (error) {
+        console.error("Erro ao listar requisições disponíveis:", error);
+        res.status(500).json({ message: "Erro interno ao listar requisições disponíveis." });
+    }
+});
+
+// (Opcional) Rota para excluir uma requisição, caso necessário no gerenciamento
+app.delete('/api/requisicoes/:id', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID de requisição inválido." });
+
+    try {
+        const requisicao = await db.collection('requisicoes').findOne({ _id: new ObjectId(id) });
+        if (!requisicao) {
+            return res.status(404).json({ message: "Requisição não encontrada." });
+        }
+        // Regra de negócio: não permitir excluir se já estiver utilizada?
+        if (requisicao.status === 'utilizada') {
+            return res.status(400).json({ message: "Não é possível excluir uma requisição que já foi utilizada." });
+        }
+
+        const result = await db.collection('requisicoes').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ message: "Requisição não encontrada para exclusão." });
+        }
+        res.status(200).json({ message: "Requisição excluída com sucesso." });
+    } catch (error) {
+        console.error("Erro ao excluir requisição:", error);
+        res.status(500).json({ message: "Erro interno ao excluir requisição." });
+    }
+});
+
+
 async function startServer() {
     await connectDB();
     app.listen(PORT, () => {
