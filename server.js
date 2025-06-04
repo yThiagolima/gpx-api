@@ -350,10 +350,165 @@ app.delete('/api/checklists/:id', simpleAuthCheck, async (req, res) => {
 });
 
 // --- ROTAS DA API PARA CHECKLISTS ---
-app.post('/api/checklists/iniciar', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
-app.get('/api/checklists/pendentes', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
-app.post('/api/checklists/:id/registrar-resultado', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
-app.get('/api/checklists/historico', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+// --- ROTAS DA API PARA CHECKLISTS ---
+
+// POST /api/checklists/iniciar - Para marcar um checklist como pendente
+app.post('/api/checklists/iniciar', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { veiculoId } = req.body;
+    if (!veiculoId || !ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID do veículo inválido." });
+
+    try {
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
+
+        const dataDeInicio = new Date(); // Usar a data atual para o início
+
+        const novoChecklistPendente = {
+            veiculoId: new ObjectId(veiculoId),
+            veiculoPlaca: veiculo.placa,
+            dataIniciado: dataDeInicio,
+            status: "pendente", // pendente, concluido
+            itensVerificados: [], // Será preenchido ao registrar resultados
+            dataRealizacao: null,
+            quilometragem: null,
+            realizadoPor: null,
+            observacoesGerais: null
+        };
+        const result = await db.collection('checklists').insertOne(novoChecklistPendente);
+
+        // ATUALIZAÇÃO: Após iniciar um checklist, considerar a data de início como a "última realização"
+        // para que o agendamento original suma da lista de "próximos" até que este seja concluído.
+        let updateVeiculoFields = {
+            'manutencaoInfo.ultimoChecklistData': dataDeInicio 
+        };
+        if (veiculo.manutencaoInfo && veiculo.manutencaoInfo.frequenciaChecklistDias) {
+            const freqDias = parseInt(veiculo.manutencaoInfo.frequenciaChecklistDias, 10);
+            if (freqDias > 0) {
+                updateVeiculoFields['manutencaoInfo.dataProxChecklist'] = new Date(new Date(dataDeInicio).setDate(dataDeInicio.getDate() + freqDias));
+            }
+        }
+        // Apenas atualiza se houver campos para atualizar (evita $set vazio)
+        if(Object.keys(updateVeiculoFields).length > 0) {
+            await db.collection('veiculos').updateOne({ _id: new ObjectId(veiculoId) }, { $set: updateVeiculoFields });
+        }
+        
+
+        res.status(201).json({ 
+            message: 'Checklist iniciado e marcado como pendente! O agendamento original foi atualizado.', 
+            checklist: { _id: result.insertedId, ...novoChecklistPendente }
+        });
+    } catch (error) {
+        console.error("Erro ao iniciar checklist:", error);
+        res.status(500).json({ message: "Erro ao iniciar checklist." });
+    }
+});
+
+// GET /api/checklists/pendentes - Para listar checklists pendentes
+app.get('/api/checklists/pendentes', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const pendentes = await db.collection('checklists')
+            .find({ status: "pendente" })
+            .sort({ dataIniciado: -1 }) // Mais recentes primeiro
+            .toArray();
+        res.status(200).json(pendentes);
+    } catch (error) {
+        console.error("Erro ao buscar checklists pendentes:", error);
+        res.status(500).json({ message: "Erro ao buscar checklists pendentes." });
+    }
+});
+
+// POST /api/checklists/:id/registrar-resultado - Para finalizar um checklist pendente
+app.post('/api/checklists/:id/registrar-resultado', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { id } = req.params; // ID do checklist pendente
+    const { 
+        dataRealizacao, 
+        quilometragem, 
+        realizadoPor, 
+        observacoesGerais, 
+        itensVerificados // Espera um array [{ nomeItem, statusItem, obsItem }]
+    } = req.body;
+
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID do checklist inválido." });
+    if (!dataRealizacao || quilometragem === undefined || !realizadoPor || !Array.isArray(itensVerificados)) {
+        return res.status(400).json({ message: "Dados incompletos para registrar resultado do checklist." });
+    }
+
+    try {
+        const checklistPendente = await db.collection('checklists').findOne({ _id: new ObjectId(id), status: "pendente" });
+        if (!checklistPendente) return res.status(404).json({ message: "Checklist pendente não encontrado ou já concluído." });
+
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(checklistPendente.veiculoId) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo associado ao checklist não encontrado." });
+
+        const parsedKm = parseInt(quilometragem, 10);
+        if (isNaN(parsedKm) || parsedKm < 0) {
+            return res.status(400).json({ message: "Quilometragem inválida." });
+        }
+        
+        const dataRealizacaoDate = new Date(Date.parse(dataRealizacao)); // Garante que é um objeto Date
+
+        const updateChecklistData = {
+            $set: {
+                status: "concluido",
+                dataRealizacao: dataRealizacaoDate,
+                quilometragem: parsedKm,
+                realizadoPor: realizadoPor.trim(),
+                observacoesGerais: observacoesGerais ? observacoesGerais.trim() : null,
+                itensVerificados: itensVerificados 
+            }
+        };
+        await db.collection('checklists').updateOne({ _id: new ObjectId(id) }, updateChecklistData);
+
+        // Atualizar veículo com data do último checklist e recalcular próximo, e KM se necessário
+        let updateVeiculoFields = {
+            'manutencaoInfo.ultimoChecklistData': dataRealizacaoDate
+        };
+        if (parsedKm > (veiculo.quilometragemAtual || 0)) { // Atualiza KM do veículo apenas se for maior
+            updateVeiculoFields.quilometragemAtual = parsedKm;
+        }
+        if (veiculo.manutencaoInfo && veiculo.manutencaoInfo.frequenciaChecklistDias) {
+            const freqDias = parseInt(veiculo.manutencaoInfo.frequenciaChecklistDias, 10);
+            if (freqDias > 0) {
+                const proximaData = new Date(dataRealizacaoDate);
+                proximaData.setDate(proximaData.getDate() + freqDias);
+                updateVeiculoFields['manutencaoInfo.dataProxChecklist'] = proximaData;
+            }
+        }
+        // Apenas atualiza se houver campos para atualizar
+        if(Object.keys(updateVeiculoFields).length > 0) {
+            await db.collection('veiculos').updateOne({ _id: new ObjectId(checklistPendente.veiculoId) }, { $set: updateVeiculoFields });
+        }
+        
+        res.status(200).json({ message: "Resultados do checklist registrados com sucesso!" });
+    } catch (error) {
+        console.error("Erro ao registrar resultados do checklist:", error);
+        res.status(500).json({ message: "Erro ao registrar resultados do checklist." });
+    }
+});
+
+app.get('/api/manutencoes/historico', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { veiculoId, mes, ano } = req.query; // Atualizado para receber filtros
+    try {
+        let query = {};
+        if (veiculoId && veiculoId !== 'todos') { 
+            if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID Veículo inválido." }); 
+            query.veiculoId = new ObjectId(veiculoId); 
+        }
+        const dateFilter = getDateQuery(mes, ano); // Usa o helper para data
+        if (dateFilter.dateMatch) {
+            query.dataRealizacao = dateFilter.dateMatch;
+        }
+        const historico = await db.collection('manutencoes').find(query).sort({ dataRealizacao: -1, dataRegistro: -1 }).toArray();
+        res.status(200).json(historico);
+    } catch (error) { 
+        console.error('Erro ao buscar histórico de manutenções:', error); 
+        res.status(500).json({ message: 'Erro ao buscar histórico de manutenções.' }); 
+    }
+});
 app.delete('/api/checklists/:id', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
 
 // --- ROTAS DA API PARA ABASTECIMENTOS ---
