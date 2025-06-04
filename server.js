@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb'); // ObjectId adicionado
 const bcrypt = require('bcryptjs');
 
 const app = express();
@@ -192,13 +192,10 @@ app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (!db) {
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
     }
-
     try {
         const veiculosCollection = db.collection('veiculos');
         const veiculos = await veiculosCollection.find({}).sort({ dataCadastro: -1 }).toArray();
-
-        res.status(200).json(veiculos); // Retorna a lista de veículos (pode ser vazia)
-
+        res.status(200).json(veiculos);
     } catch (error) {
         console.error('Erro ao buscar veículos:', error);
         res.status(500).json({ message: 'Erro interno ao tentar buscar veículos.' });
@@ -258,7 +255,6 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
                                    new Date(Date.now() + parseInt(frequenciaChecklist) * 24 * 60 * 60 * 1000) : null
             },
             dataCadastro: new Date(),
-            // userId: req.user.userId // Adicionar quando JWT estiver implementado
         };
 
         const result = await veiculosCollection.insertOne(novoVeiculo);
@@ -277,6 +273,37 @@ app.post('/api/veiculos', simpleAuthCheck, async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao tentar cadastrar veículo.' });
     }
 });
+
+// DELETE /api/veiculos/:id - Excluir um veículo
+app.delete('/api/veiculos/:id', simpleAuthCheck, async (req, res) => {
+    if (!db) {
+        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
+    }
+
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "ID de veículo inválido." });
+    }
+
+    try {
+        const veiculosCollection = db.collection('veiculos');
+        const result = await veiculosCollection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+            console.log('Tentativa de exclusão: Veículo com ID não encontrado ->', id);
+            return res.status(404).json({ message: "Veículo não encontrado para exclusão." });
+        }
+
+        console.log('Veículo excluído com sucesso. ID:', id);
+        res.status(200).json({ message: "Veículo excluído com sucesso.", id: id });
+
+    } catch (error) {
+        console.error('Erro ao excluir veículo:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar excluir veículo.' });
+    }
+});
+
 
 // --- Iniciar o servidor APÓS conectar ao DB ---
 async function startServer() {
