@@ -37,20 +37,23 @@ app.use(cors());
 app.use(express.json());
 
 // --- Helper para criar query de data para Relatórios ---
-function getDateQuery(mes, ano) {
+function getDateQuery(dataInicio, dataFim) { // Modificado para aceitar dataInicio e dataFim
     const query = {};
-    if (ano && ano !== 'todos') {
-        const year = parseInt(ano);
-        let startDate, endDate;
-        if (mes && mes !== 'todos') {
-            const month = parseInt(mes) - 1; 
-            startDate = new Date(Date.UTC(year, month, 1, 0, 0, 0)); 
-            endDate = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999)); 
-        } else {
-            startDate = new Date(Date.UTC(year, 0, 1, 0, 0, 0)); 
-            endDate = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999)); 
-        }
-        query.dateMatch = { $gte: startDate, $lte: endDate }; 
+    let startDate, endDate;
+
+    if (dataInicio) {
+        startDate = new Date(Date.parse(dataInicio + 'T00:00:00.000Z')); // Adiciona T00:00:00Z para parse correto como UTC
+    }
+    if (dataFim) {
+        endDate = new Date(Date.parse(dataFim + 'T23:59:59.999Z')); // Adiciona T23:59:59Z para parse correto como UTC
+    }
+
+    if (startDate && endDate) {
+        query.dateMatch = { $gte: startDate, $lte: endDate };
+    } else if (startDate) {
+        query.dateMatch = { $gte: startDate };
+    } else if (endDate) {
+        query.dateMatch = { $lte: endDate };
     }
     return query;
 }
@@ -197,8 +200,26 @@ app.post('/login', simpleAuthCheck, async (req, res) => {
 });
 
 // --- ROTAS DA API PARA A DASHBOARD ---
-app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
-app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
+function getDateQuery(dataInicio, dataFim) { // Modificado para aceitar dataInicio e dataFim
+    const query = {};
+    let startDate, endDate;
+
+    if (dataInicio) {
+        startDate = new Date(Date.parse(dataInicio + 'T00:00:00.000Z')); // Adiciona T00:00:00Z para parse correto como UTC
+    }
+    if (dataFim) {
+        endDate = new Date(Date.parse(dataFim + 'T23:59:59.999Z')); // Adiciona T23:59:59Z para parse correto como UTC
+    }
+
+    if (startDate && endDate) {
+        query.dateMatch = { $gte: startDate, $lte: endDate };
+    } else if (startDate) {
+        query.dateMatch = { $gte: startDate };
+    } else if (endDate) {
+        query.dateMatch = { $lte: endDate };
+    }
+    return query;
+}
 
 // --- ROTAS DA API PARA VEÍCULOS ---
 app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
