@@ -221,6 +221,146 @@ function getDateQuery(dataInicio, dataFim) { // Modificado para aceitar dataInic
     return query;
 }
 
+// --- ROTAS DA API PARA A DASHBOARD ---
+
+app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const totalVeiculos = await db.collection('veiculos').countDocuments();
+        const hoje = new Date();
+        // Define o início do dia em UTC para comparações consistentes de data
+        const inicioHoje = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), hoje.getUTCDate(), 0, 0, 0, 0));
+
+        const veiculosParaAlerta = await db.collection('veiculos').find({
+            $or: [ // Busca veículos que *podem* ter um alerta ou agendamento
+                { 'manutencaoInfo.proxTrocaOleoData': { $exists: true, $ne: null } },
+                { 'manutencaoInfo.proxTrocaOleoKm': { $exists: true, $ne: null } },
+                { 'manutencaoInfo.dataProxChecklist': { $exists: true, $ne: null } }
+            ]
+        }).toArray();
+
+        let alertasAtivosCount = 0;
+        let manutencoesAgendadasCount = 0;
+
+        veiculosParaAlerta.forEach(v => {
+            let alertaVencidoEsteVeiculo = false;
+            let agendamentoFuturoEsteVeiculo = false;
+
+            if (v.manutencaoInfo) {
+                // Checa Troca de Óleo por Data
+                if (v.manutencaoInfo.proxTrocaOleoData) {
+                    const dataOleo = new Date(v.manutencaoInfo.proxTrocaOleoData); 
+                    if (dataOleo < inicioHoje) { 
+                        alertaVencidoEsteVeiculo = true;
+                    } else {
+                        agendamentoFuturoEsteVeiculo = true;
+                    }
+                }
+                // Checa Troca de Óleo por KM (se não estiver já vencido por data)
+                if (!alertaVencidoEsteVeiculo && v.manutencaoInfo.proxTrocaOleoKm && v.quilometragemAtual >= v.manutencaoInfo.proxTrocaOleoKm) {
+                    alertaVencidoEsteVeiculo = true; 
+                }
+                // Checa Checklist por Data
+                if (v.manutencaoInfo.dataProxChecklist) {
+                    const dataCheck = new Date(v.manutencaoInfo.dataProxChecklist); 
+                    if (dataCheck < inicioHoje) { 
+                        alertaVencidoEsteVeiculo = true;
+                    } else {
+                        // Só conta como agendamento futuro se não houver outro tipo de alerta vencido para este veículo (simplificado)
+                        if (!alertaVencidoEsteVeiculo) agendamentoFuturoEsteVeiculo = true;
+                    }
+                }
+            }
+            if (alertaVencidoEsteVeiculo) {
+                alertasAtivosCount++;
+            } else if (agendamentoFuturoEsteVeiculo) { 
+                manutencoesAgendadasCount++;
+            }
+        });
+        
+        res.status(200).json({ 
+            totalVeiculos: totalVeiculos,
+            alertasAtivos: alertasAtivosCount, 
+            manutencoesAgendadas: manutencoesAgendadasCount 
+        });
+    } catch (error) {
+        console.error("Erro em /api/dashboard/stats:", error);
+        res.status(500).json({ message: "Erro ao buscar estatísticas do dashboard."});
+    }
+});
+
+app.get('/api/dashboard/recent-activity', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    try {
+        const manutencoesPromise = db.collection('manutencoes').find()
+            .sort({ dataRealizacao: -1 })
+            .limit(5)
+            .project({ _id: 1, veiculoPlaca: 1, tipoManutencao: 1, dataRealizacao: 1, descricao: 1 })
+            .toArray();
+        const checklistsPromise = db.collection('checklists').find({status: "concluido"}) 
+            .sort({ dataRealizacao: -1 })
+            .limit(5)
+            .project({ _id: 1, veiculoPlaca: 1, realizadoPor: 1, dataRealizacao: 1, observacoesGerais: 1 })
+            .toArray();
+        const abastecimentosPromise = db.collection('abastecimentos').find()
+            .sort({ data: -1 })
+            .limit(5)
+            .project({ _id: 1, veiculoPlaca: 1, litros: 1, data: 1, custoTotal: 1 })
+            .toArray();
+        const multasPromise = db.collection('multas').find() 
+            .sort({ dataInfracao: -1 })
+            .limit(5)
+            .project({ _id: 1, veiculoPlaca: 1, descricao: 1, dataInfracao: 1, valor: 1, statusPagamento: 1 })
+            .toArray();
+        
+        const [
+            manutencoesRecentes, 
+            checklistsRecentes, 
+            abastecimentosRecentes,
+            multasRecentes
+        ] = await Promise.all([
+            manutencoesPromise, 
+            checklistsPromise, 
+            abastecimentosPromise,
+            multasPromise
+        ]);
+        
+        let activities = [];
+
+        manutencoesRecentes.forEach(m => activities.push({ 
+            id: m._id, 
+            tipo: 'manutencao', 
+            descricao: `Manutenção (${m.tipoManutencao || 'Geral'}) veículo ${m.veiculoPlaca || ''}${m.descricao ? ': '+m.descricao.substring(0,30)+'...' : ''}`, 
+            data: m.dataRealizacao 
+        }));
+        checklistsRecentes.forEach(c => activities.push({ 
+            id: c._id, 
+            tipo: 'checklist', 
+            descricao: `Checklist ${c.veiculoPlaca || ''} por ${c.realizadoPor || 'N/A'}. ${c.observacoesGerais ? c.observacoesGerais.substring(0,30)+'...' : 'Concluído.'}`, 
+            data: c.dataRealizacao 
+        }));
+        abastecimentosRecentes.forEach(a => activities.push({ 
+            id: a._id, 
+            tipo: 'abastecimento', 
+            descricao: `Abastecimento ${a.veiculoPlaca || ''} (${a.litros.toFixed(1)}L - R$ ${a.custoTotal.toFixed(2)})`, 
+            data: a.data 
+        }));
+        multasRecentes.forEach(mu => activities.push({
+            id: mu._id,
+            tipo: 'multa',
+            descricao: `Multa ${mu.veiculoPlaca || ''}: ${mu.descricao.substring(0,30)}... (R$ ${mu.valor.toFixed(2)} - ${mu.statusPagamento})`,
+            data: mu.dataInfracao 
+        }));
+
+        activities.sort((a, b) => new Date(b.data) - new Date(a.data));
+        
+        res.status(200).json(activities.slice(0, 5));
+
+    } catch (error) {
+        console.error("Erro em /api/dashboard/recent-activity:", error);
+        res.status(500).json({ message: "Erro ao buscar atividades recentes."});
+    }
+});
 // --- ROTAS DA API PARA VEÍCULOS ---
 app.get('/api/veiculos', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
