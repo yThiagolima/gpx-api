@@ -59,9 +59,85 @@ app.get('/', (req, res) => {
 });
 
 // --- Rota de REGISTRO ---
-app.post('/register', async (req, res) => { /* ...código mantido... */ });
+app.post('/register', async (req, res) => {
+    if (!db) {
+        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." });
+    }
 
-// --- Rota de LOGIN ---
+    const { username, email, password } = req.body;
+
+    // Validações básicas de entrada
+    if (!username || !email || !password) {
+        return res.status(400).json({ message: 'Nome de usuário, email e senha são obrigatórios.' });
+    }
+    if (username.length < 3) {
+        return res.status(400).json({ message: 'Nome de usuário deve ter pelo menos 3 caracteres.' });
+    }
+    if (password.length < 6) {
+        return res.status(400).json({ message: 'A senha deve ter pelo menos 6 caracteres.' });
+    }
+    // Validação de caracteres permitidos no nome de usuário
+    if (!/^[a-zA-Z0-9_.-]+$/.test(username)) {
+        return res.status(400).json({ message: 'Nome de usuário deve conter apenas letras, números e os caracteres "_", ".", "-".' });
+    }
+    // Validação simples de formato de email
+    if (!/\S+@\S+\.\S+/.test(email)) {
+        return res.status(400).json({ message: 'Formato de email inválido.' });
+    }
+
+    try {
+        const usersCollection = db.collection('users');
+        const usernameInputLower = username.toLowerCase(); // Para verificação case-insensitive
+        const emailInputLower = email.toLowerCase();     // Salvar e verificar em minúsculas para consistência
+
+        // Verifica se o nome de usuário ou email já existem
+        const existingUser = await usersCollection.findOne({
+            $or: [
+                { username: usernameInputLower }, // Compara com o nome de usuário em minúsculas
+                { email: emailInputLower }
+            ]
+        });
+
+        if (existingUser) {
+            if (existingUser.username === usernameInputLower) { // Compara com o nome de usuário em minúsculas
+                return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
+            }
+            if (existingUser.email === emailInputLower) {
+                return res.status(409).json({ message: 'Este email já está cadastrado.' });
+            }
+        }
+
+        // Criptografa a senha
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+        // Cria o novo usuário
+        const newUser = {
+            username: username, // Salva o nome de usuário com o case original fornecido
+            email: emailInputLower, // Salva o email em minúsculas
+            password: hashedPassword,
+            createdAt: new Date()
+        };
+        const result = await usersCollection.insertOne(newUser);
+
+        console.log('Novo usuário registrado:', newUser.username, 'Email:', newUser.email, 'ID MongoDB:', result.insertedId);
+        
+        // Retorna uma resposta de sucesso
+        res.status(201).json({
+            message: 'Usuário registrado com sucesso!',
+            user: { 
+                id: result.insertedId, 
+                username: newUser.username, // Retorna o nome de usuário com o case original
+                email: newUser.email 
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao registrar usuário:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar registrar usuário.' });
+    }
+});
+
 // --- Rota de LOGIN ---
 app.post('/login', simpleAuthCheck, async (req, res) => { // Adicionei simpleAuthCheck se for padrão, mas login geralmente não tem auth prévio. Remova se não aplicável.
     if (!db) { 
