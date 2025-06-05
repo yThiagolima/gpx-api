@@ -5,6 +5,9 @@ const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const simpleAuthCheck = (req, res, next) => { 
+    next(); 
+};
 
 // --- Configuração do MongoDB ---
 const mongoUri = process.env.MONGODB_URI;
@@ -139,7 +142,7 @@ app.post('/register', async (req, res) => {
 });
 
 // --- Rota de LOGIN ---
-app.post('/login', simpleAuthCheck, async (req, res) => { // Adicionei simpleAuthCheck se for padrão, mas login geralmente não tem auth prévio. Remova se não aplicável.
+app.post('/login', simpleAuthCheck, async (req, res) => { 
     if (!db) { 
         return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." }); 
     }
@@ -192,7 +195,6 @@ app.post('/login', simpleAuthCheck, async (req, res) => { // Adicionei simpleAut
         res.status(500).json({ message: 'Erro interno ao tentar fazer login.' });
     }
 });
-const simpleAuthCheck = (req, res, next) => { next(); };
 
 // --- ROTAS DA API PARA A DASHBOARD ---
 app.get('/api/dashboard/stats', simpleAuthCheck, async (req, res) => { /* ...código mantido... */ });
