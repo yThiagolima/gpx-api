@@ -882,45 +882,172 @@ app.delete('/api/multas/:id', simpleAuthCheck, async (req, res) => {
 // Estas rotas precisarão ser ATUALIZADAS no futuro para incluir custos de MULTAS
 app.get('/api/relatorios/gastos-detalhados', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
-    const { veiculoId, mes, ano } = req.query;
+    const { veiculoId, dataInicio, dataFim, tipoGasto } = req.query;
     try {
-        let queryManutencoes = {}; let queryAbastecimentos = {};
-        if (veiculoId && veiculoId !== 'todos') { if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID veículo inválido." }); queryManutencoes.veiculoId = new ObjectId(veiculoId); queryAbastecimentos.veiculoId = new ObjectId(veiculoId); }
-        const dateFilterM = getDateQuery(mes, ano); if (dateFilterM.dateMatch) queryManutencoes.dataRealizacao = dateFilterM.dateMatch;
-        const dateFilterA = getDateQuery(mes, ano); if (dateFilterA.dateMatch) queryAbastecimentos.data = dateFilterA.dateMatch; // Campo 'data' para abastecimentos
-        const manutencoes = await db.collection('manutencoes').find(queryManutencoes).toArray();
-        const abastecimentos = await db.collection('abastecimentos').find(queryAbastecimentos).toArray();
-        let gastosCombinados = []; let totalGeral = 0;
-        manutencoes.forEach(m => { if (m.custo && m.custo > 0) { gastosCombinados.push({ _id: m._id, data: m.dataRealizacao, veiculoId: m.veiculoId, veiculoPlaca: m.veiculoPlaca, tipoGasto: "Manutenção", descricaoGasto: m.tipoManutencao || m.descricao || "Manutenção geral", valorGasto: parseFloat(m.custo.toFixed(2)) }); totalGeral += m.custo; } });
-        abastecimentos.forEach(a => { if (a.custoTotal && a.custoTotal > 0) { gastosCombinados.push({ _id: a._id, data: a.data, veiculoId: a.veiculoId, veiculoPlaca: a.veiculoPlaca, tipoGasto: "Combustível", descricaoGasto: `Abastecimento ${a.litros.toFixed(2)}L (${a.posto || 'N/I'})`, valorGasto: parseFloat(a.custoTotal.toFixed(2)) }); totalGeral += a.custoTotal; } });
-        gastosCombinados.sort((x, y) => new Date(y.data) - new Date(x.data)); 
-        res.status(200).json({ detalhes: gastosCombinados, sumario: { totalGastos: parseFloat(totalGeral.toFixed(2)) } });
-    } catch (error) { console.error("Erro gastos detalhados:", error); res.status(500).json({ message: "Erro gastos detalhados." }); }
+        let query = {};
+        let veiculoQuery = {};
+        if (veiculoId && veiculoId !== 'todos') {
+            if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID Veículo inválido." });
+            query.veiculoId = new ObjectId(veiculoId);
+            veiculoQuery._id = new ObjectId(veiculoId);
+        }
+
+        const dateFilter = getDateQuery(dataInicio, dataFim);
+        if (dateFilter.dateMatch) {
+            // Aplicar filtro de data em cada tipo de gasto que tem campo de data relevante
+            query.dataRealizacao = dateFilter.dateMatch; // Para Manutenções
+            // Para Abastecimentos, o campo é 'data'
+            // Para Multas, o campo é 'dataPagamento' (se o tipo for 'Multa' e paga)
+        }
+
+        let detalhesGastos = [];
+        let totalGastos = 0;
+
+        // 1. Manutenções
+        if (!tipoGasto || tipoGasto === 'todos' || tipoGasto === 'Manutenção') {
+            const manutQuery = { ...query }; // Clona query base
+            if (dateFilter.dateMatch) manutQuery.dataRealizacao = dateFilter.dateMatch;
+
+            const manutencoes = await db.collection('manutencoes').find(manutQuery).toArray();
+            manutencoes.forEach(m => {
+                if (m.custo && m.custo > 0) {
+                    detalhesGastos.push({
+                        tipoGasto: "Manutenção",
+                        descricaoGasto: m.tipoManutencao + (m.descricao ? ` - ${m.descricao}` : ''),
+                        valorGasto: m.custo,
+                        data: m.dataRealizacao,
+                        veiculoId: m.veiculoId,
+                        veiculoPlaca: m.veiculoPlaca
+                    });
+                    totalGastos += m.custo;
+                }
+            });
+        }
+
+        // 2. Abastecimentos
+        if (!tipoGasto || tipoGasto === 'todos' || tipoGasto === 'Combustível') {
+            const abastQuery = { ...query }; // Clona query base, mas remove dataRealizacao
+            delete abastQuery.dataRealizacao;
+            if (dateFilter.dateMatch) abastQuery.data = dateFilter.dateMatch;
+
+
+            const abastecimentos = await db.collection('abastecimentos').find(abastQuery).toArray();
+            abastecimentos.forEach(a => {
+                if (a.custoTotal && a.custoTotal > 0) {
+                    detalhesGastos.push({
+                        tipoGasto: "Combustível",
+                        descricaoGasto: `Abastecimento ${a.litros.toFixed(1)}L no posto ${a.posto || 'N/I'}`,
+                        valorGasto: a.custoTotal,
+                        data: a.data,
+                        veiculoId: a.veiculoId,
+                        veiculoPlaca: a.veiculoPlaca
+                    });
+                    totalGastos += a.custoTotal;
+                }
+            });
+        }
+
+        // 3. Multas (PAGAS)
+        if (!tipoGasto || tipoGasto === 'todos' || tipoGasto === 'Multa') {
+            const multaQuery = { ...query, statusPagamento: 'paga' }; // Clona query base e adiciona status
+            delete multaQuery.dataRealizacao; // Remove filtro de dataRealizacao
+            if (dateFilter.dateMatch) multaQuery.dataPagamento = dateFilter.dateMatch; // Filtra pela dataPagamento
+
+            const multasPagas = await db.collection(MULTAS_COLLECTION).find(multaQuery).toArray();
+            multasPagas.forEach(m => {
+                if (m.valor && m.valor > 0) {
+                    detalhesGastos.push({
+                        tipoGasto: "Multa",
+                        descricaoGasto: m.descricao + (m.autorInfracao ? ` (Autor: ${m.autorInfracao})` : ''),
+                        valorGasto: m.valor,
+                        data: m.dataPagamento, // Usa a data do pagamento para o relatório de gastos
+                        veiculoId: m.veiculoId,
+                        veiculoPlaca: m.veiculoPlaca
+                    });
+                    totalGastos += m.valor;
+                }
+            });
+        }
+        
+        detalhesGastos.sort((a, b) => new Date(b.data) - new Date(a.data));
+
+        res.status(200).json({
+            detalhes: detalhesGastos,
+            sumario: { totalGastos }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar gastos detalhados:', error);
+        res.status(500).json({ message: 'Erro ao buscar gastos detalhados.' });
+    }
 });
 
 app.get('/api/relatorios/gastos-mensais', simpleAuthCheck, async (req, res) => {
     if (!db) return res.status(500).json({ message: "DB não conectado." });
-    const { veiculoId, ano } = req.query; const targetAno = (ano && ano !== 'todos') ? parseInt(ano) : new Date().getFullYear();
+    const { veiculoId, ano } = req.query;
+
+    const anoAtual = ano ? parseInt(ano) : new Date().getFullYear();
+    if (isNaN(anoAtual)) return res.status(400).json({ message: "Ano inválido." });
+
     try {
-        const baseDateMatch = { $gte: new Date(Date.UTC(targetAno, 0, 1)), $lt: new Date(Date.UTC(targetAno + 1, 0, 1)) };
-        let matchAbastecimento = { data: baseDateMatch, custoTotal: { $gt: 0} };
-        let matchManutencao = { dataRealizacao: baseDateMatch, custo: { $gt: 0 } };
-        if (veiculoId && veiculoId !== 'todos') { if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID inválido." }); matchAbastecimento.veiculoId = new ObjectId(veiculoId); matchManutencao.veiculoId = new ObjectId(veiculoId); }
-        
-        // Usando timezone no $month pode ser específico do MongoDB Atlas ou versões mais recentes.
-        // Se der erro, pode ser necessário buscar os dados e agrupar no JS, ou ajustar para não usar timezone na query.
-        const groupStageAbastecimentos = { $group: { _id: { mes: { $month: "$data" } }, totalCombustivel: { $sum: "$custoTotal" } } };
-        const groupStageManutencoes = { $group: { _id: { mes: { $month: "$dataRealizacao" } }, totalManutencao: { $sum: "$custo" } } };
-        const sortStage = { $sort: { "_id.mes": 1 } }; 
-        const gastosCombustivel = await db.collection('abastecimentos').aggregate([ { $match: matchAbastecimento } , groupStageAbastecimentos, sortStage]).toArray();
-        const gastosManutencao = await db.collection('manutencoes').aggregate([ { $match: matchManutencao }, groupStageManutencoes, sortStage]).toArray();
-        const mesesNomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-        let dataCombustivel = Array(12).fill(0); let dataManutencao = Array(12).fill(0);
-        gastosCombustivel.forEach(item => { dataCombustivel[item._id.mes - 1] = parseFloat(item.totalCombustivel.toFixed(2)); });
-        gastosManutencao.forEach(item => { dataManutencao[item._id.mes - 1] = parseFloat(item.totalManutencao.toFixed(2)); });
-        let datasets = [ { label: 'Gastos com Combustível', data: dataCombustivel, backgroundColor: 'rgba(255, 159, 64, 0.5)', borderColor: 'rgba(255, 159, 64, 1)', borderWidth: 1 }, { label: 'Gastos com Manutenção', data: dataManutencao, backgroundColor: 'rgba(75, 192, 192, 0.5)', borderColor: 'rgba(75, 192, 192, 1)', borderWidth: 1 } ];
-        res.status(200).json({ labels: mesesNomes, datasets });
-    } catch (error) { console.error("Erro gastos mensais:", error); res.status(500).json({ message: "Erro gastos mensais." }); }
+        let veiculoQuery = {};
+        if (veiculoId && veiculoId !== 'todos') {
+            if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID Veículo inválido." });
+            veiculoQuery = { veiculoId: new ObjectId(veiculoId) };
+        }
+
+        const labels = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+        const manutencaoData = new Array(12).fill(0);
+        const combustivelData = new Array(12).fill(0);
+        const multasData = new Array(12).fill(0); // Novo array para multas
+
+        // Gastos com Manutenção
+        const manutencoes = await db.collection('manutencoes').find({
+            ...veiculoQuery,
+            dataRealizacao: {
+                $gte: new Date(Date.UTC(anoAtual, 0, 1)),
+                $lt: new Date(Date.UTC(anoAtual + 1, 0, 1))
+            },
+            custo: { $gt: 0 }
+        }).project({ dataRealizacao: 1, custo: 1 }).toArray();
+        manutencoes.forEach(m => { const mes = new Date(m.dataRealizacao).getUTCMonth(); manutencaoData[mes] += m.custo; });
+
+        // Gastos com Combustível
+        const abastecimentos = await db.collection('abastecimentos').find({
+            ...veiculoQuery,
+            data: {
+                $gte: new Date(Date.UTC(anoAtual, 0, 1)),
+                $lt: new Date(Date.UTC(anoAtual + 1, 0, 1))
+            },
+            custoTotal: { $gt: 0 }
+        }).project({ data: 1, custoTotal: 1 }).toArray();
+        abastecimentos.forEach(a => { const mes = new Date(a.data).getUTCMonth(); combustivelData[mes] += a.custoTotal; });
+
+        // Gastos com Multas (PAGAS)
+        const multasPagas = await db.collection(MULTAS_COLLECTION).find({
+            ...veiculoQuery,
+            statusPagamento: 'paga',
+            dataPagamento: { // Filtra pela data de pagamento
+                $gte: new Date(Date.UTC(anoAtual, 0, 1)),
+                $lt: new Date(Date.UTC(anoAtual + 1, 0, 1))
+            },
+            valor: { $gt: 0 }
+        }).project({ dataPagamento: 1, valor: 1 }).toArray();
+        multasPagas.forEach(m => { const mes = new Date(m.dataPagamento).getUTCMonth(); multasData[mes] += m.valor; });
+
+
+        res.status(200).json({
+            labels: labels,
+            datasets: [
+                { label: 'Manutenção', data: manutencaoData, backgroundColor: 'rgba(255, 99, 132, 0.7)', borderColor: 'rgba(255, 99, 132, 1)', borderWidth: 1 },
+                { label: 'Combustível', data: combustivelData, backgroundColor: 'rgba(54, 162, 235, 0.7)', borderColor: 'rgba(54, 162, 235, 1)', borderWidth: 1 },
+                { label: 'Multas', data: multasData, backgroundColor: 'rgba(255, 206, 86, 0.7)', borderColor: 'rgba(255, 206, 86, 1)', borderWidth: 1 } // Cor para multas
+            ]
+        });
+    } catch (error) {
+        console.error('Erro ao gerar dados para gráfico de gastos mensais:', error);
+        res.status(500).json({ message: 'Erro ao gerar dados para gráfico de gastos mensais.' });
+    }
 });
 
 app.get('/api/relatorios/analise-combustivel', simpleAuthCheck, async (req, res) => {
@@ -993,6 +1120,92 @@ app.get('/api/relatorios/analise-combustivel', simpleAuthCheck, async (req, res)
     }
 });
 
+app.post('/api/multas', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { 
+        veiculoId, dataInfracao, descricao, valor, 
+        dataVencimento, statusPagamento, dataPagamento, autorInfracao // Adicionado autorInfracao
+    } = req.body;
+
+    if (!veiculoId || !dataInfracao || !descricao || !valor || !statusPagamento) {
+        return res.status(400).json({ message: "Campos obrigatórios: Veículo, Data da Infração, Descrição, Valor e Status do Pagamento." });
+    }
+    if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID do Veículo inválido." });
+
+    try {
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo não encontrado." });
+
+        const novaMulta = {
+            veiculoId: new ObjectId(veiculoId),
+            veiculoPlaca: veiculo.placa,
+            dataInfracao: new Date(Date.parse(dataInfracao)),
+            descricao: descricao.trim(),
+            autorInfracao: autorInfracao ? autorInfracao.trim() : null, // Salva o autor
+            valor: parseFloat(valor),
+            dataVencimento: dataVencimento ? new Date(Date.parse(dataVencimento)) : null,
+            statusPagamento: statusPagamento,
+            dataPagamento: (statusPagamento === 'paga' && dataPagamento) ? new Date(Date.parse(dataPagamento)) : null,
+            dataRegistro: new Date()
+        };
+        if (statusPagamento === 'paga' && !novaMulta.dataPagamento) novaMulta.dataPagamento = new Date();
+
+        const result = await db.collection(MULTAS_COLLECTION).insertOne(novaMulta);
+        res.status(201).json({ message: "Multa cadastrada com sucesso!", multa: { _id: result.insertedId, ...novaMulta }});
+    } catch (error) { console.error("Erro ao cadastrar multa:", error); res.status(500).json({ message: "Erro interno ao cadastrar multa." }); }
+});
+
+app.get('/api/multas', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { veiculoId, statusPagamento, search } = req.query;
+    try {
+        let query = {};
+        if (veiculoId && veiculoId !== 'todos') {
+            if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID de Veículo inválido para filtro." });
+            query.veiculoId = new ObjectId(veiculoId);
+        }
+        if (statusPagamento && statusPagamento !== 'todos') query.statusPagamento = statusPagamento;
+        if (search) {
+            const searchRegex = new RegExp(search, 'i');
+            query.$or = [ { veiculoPlaca: searchRegex }, { descricao: searchRegex }, { autorInfracao: searchRegex } ]; // Adicionado autorInfracao na busca
+        }
+        const multas = await db.collection(MULTAS_COLLECTION).find(query).sort({ dataInfracao: -1 }).toArray();
+        res.status(200).json(multas);
+    } catch (error) { console.error("Erro ao listar multas:", error); res.status(500).json({ message: "Erro interno ao listar multas." }); }
+});
+
+app.put('/api/multas/:id', simpleAuthCheck, async (req, res) => {
+    if (!db) return res.status(500).json({ message: "DB não conectado." });
+    const { id } = req.params;
+    const { veiculoId, dataInfracao, descricao, valor, dataVencimento, statusPagamento, dataPagamento, autorInfracao } = req.body; // Adicionado autorInfracao
+
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "ID da multa inválido." });
+    if (!veiculoId || !dataInfracao || !descricao || !valor || !statusPagamento) return res.status(400).json({ message: "Campos obrigatórios devem ser fornecidos para atualização." });
+    if (!ObjectId.isValid(veiculoId)) return res.status(400).json({ message: "ID do Veículo para atualização inválido." });
+    
+    try {
+        const veiculo = await db.collection('veiculos').findOne({ _id: new ObjectId(veiculoId) });
+        if (!veiculo) return res.status(404).json({ message: "Veículo associado à multa não encontrado." });
+
+        const dadosAtualizados = {
+            veiculoId: new ObjectId(veiculoId),
+            veiculoPlaca: veiculo.placa,
+            dataInfracao: new Date(Date.parse(dataInfracao)),
+            descricao: descricao.trim(),
+            autorInfracao: autorInfracao ? autorInfracao.trim() : null, // Atualiza o autor
+            valor: parseFloat(valor),
+            dataVencimento: dataVencimento ? new Date(Date.parse(dataVencimento)) : null,
+            statusPagamento: statusPagamento,
+            dataPagamento: (statusPagamento === 'paga' && dataPagamento) ? new Date(Date.parse(dataPagamento)) : (statusPagamento === 'paga' ? new Date() : null),
+            dataUltimaModificacao: new Date()
+        };
+        if (statusPagamento !== 'paga') dadosAtualizados.dataPagamento = null;
+
+        const result = await db.collection(MULTAS_COLLECTION).updateOne({ _id: new ObjectId(id) },{ $set: dadosAtualizados });
+        if (result.matchedCount === 0) return res.status(404).json({ message: "Multa não encontrada para atualização." });
+        res.status(200).json({ message: "Multa atualizada com sucesso!", multa: { _id: id, ...dadosAtualizados } });
+    } catch (error) { console.error("Erro ao atualizar multa:", error); res.status(500).json({ message: "Erro interno ao atualizar multa." }); }
+});
 
 // --- Iniciar o servidor APÓS conectar ao DB ---
 async function startServer() {
