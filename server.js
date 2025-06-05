@@ -62,8 +62,60 @@ app.get('/', (req, res) => {
 app.post('/register', async (req, res) => { /* ...código mantido... */ });
 
 // --- Rota de LOGIN ---
-app.post('/login', async (req, res) => { /* ...código mantido... */ });
+// --- Rota de LOGIN ---
+app.post('/login', simpleAuthCheck, async (req, res) => { // Adicionei simpleAuthCheck se for padrão, mas login geralmente não tem auth prévio. Remova se não aplicável.
+    if (!db) { 
+        return res.status(500).json({ message: "Erro interno do servidor: Banco de dados não conectado." }); 
+    }
 
+    const { loginIdentifier, password } = req.body;
+
+    if (!loginIdentifier || !password) { 
+        return res.status(400).json({ message: 'Identificador de login (usuário/email) e senha são obrigatórios.' }); 
+    }
+
+    try {
+        const usersCollection = db.collection('users');
+        const loginIdentifierLower = loginIdentifier.toLowerCase();
+
+        // Procura pelo usuário pelo nome de usuário (case-insensitive) ou email (case-sensitive, pois foi salvo em minúsculo)
+        const user = await usersCollection.findOne({ 
+            $or: [
+                { username: { $regex: new RegExp(`^${loginIdentifierLower}$`, 'i') } }, 
+                { email: loginIdentifierLower }
+            ] 
+        });
+
+        if (!user) {
+            console.log('Falha no login: Usuário/Email não encontrado para ->', loginIdentifier);
+            return res.status(401).json({ message: 'Credenciais inválidas.' }); // Mensagem genérica por segurança
+        }
+
+        const isPasswordMatch = await bcrypt.compare(password, user.password);
+
+        if (!isPasswordMatch) {
+            console.log('Falha no login: Senha incorreta para ->', user.username);
+            return res.status(401).json({ message: 'Credenciais inválidas.' }); // Mensagem genérica
+        }
+
+        // Login bem-sucedido
+        console.log('Login bem-sucedido para:', user.username);
+        // Aqui você geraria e retornaria um token JWT em uma aplicação mais robusta
+        res.status(200).json({
+            message: 'Login bem-sucedido!',
+            user: { // Retorna apenas dados seguros do usuário
+                id: user._id,
+                username: user.username, // Retorna o username com o case original salvo
+                email: user.email
+            }
+            // token: tokenGerado // Exemplo de como seria com JWT
+        });
+
+    } catch (error) {
+        console.error('Erro durante o login:', error);
+        res.status(500).json({ message: 'Erro interno ao tentar fazer login.' });
+    }
+});
 const simpleAuthCheck = (req, res, next) => { next(); };
 
 // --- ROTAS DA API PARA A DASHBOARD ---
