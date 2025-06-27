@@ -1,12 +1,17 @@
 // 1. CARREGAR VARIÁVEIS DE AMBIENTE E BIBLIOTECAS
 require('dotenv').config();
-const express = require('express'); // <--- LINHA CORRIGIDA
+const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
 // 2. INICIALIZAR O APLICATIVO E CONFIGURAR MIDDLEWARES
 const app = express();
-app.use(cors());
+
+// Habilita o CORS para permitir que o frontend (no GitHub Pages) acesse esta API.
+// Esta é a linha que corrige o erro "blocked by CORS policy".
+app.use(cors()); 
+
+// Habilita o servidor a entender requisições com corpo em formato JSON
 app.use(express.json());
 
 // 3. CONECTAR AO BANCO DE DADOS
@@ -52,7 +57,7 @@ app.get('/api', (req, res) => {
 // Rota para LISTAR TODOS os clientes (GET)
 app.get('/api/customers', async (req, res) => {
     try {
-        const customers = await Customer.find().sort({ createdAt: -1 }); // .sort para trazer os mais recentes primeiro
+        const customers = await Customer.find().sort({ createdAt: -1 }); // Traz os mais recentes primeiro
         res.status(200).json({
             status: 'success',
             results: customers.length,
