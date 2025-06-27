@@ -1,6 +1,6 @@
 // 1. CARREGAR VARIÁVEIS DE AMBIENTE E BIBLIOTECAS
 require('dotenv').config();
-const express = a=> ('express');
+const express = require('express'); // <--- LINHA CORRIGIDA
 const mongoose = require('mongoose');
 const cors = require('cors');
 
@@ -19,7 +19,6 @@ mongoose.connect(process.env.MONGO_URI)
 
 // ------------------------------------------------------------------
 // 4. DEFINIÇÃO DO MODELO (SCHEMA) DO CLIENTE
-// A "planta" de como os dados do cliente são salvos, agora dentro do server.js
 // ------------------------------------------------------------------
 const customerSchema = new mongoose.Schema({
     name: {
@@ -41,10 +40,8 @@ const customerSchema = new mongoose.Schema({
 
 const Customer = mongoose.model('Customer', customerSchema);
 
-
 // ------------------------------------------------------------------
 // 5. ROTAS E LÓGICA DA API
-// As rotas e a lógica do controlador, tudo junto.
 // ------------------------------------------------------------------
 
 // Rota de Teste
@@ -52,11 +49,10 @@ app.get('/api', (req, res) => {
     res.status(200).json({ message: "API do Sistema de OS está funcionando!" });
 });
 
-
 // Rota para LISTAR TODOS os clientes (GET)
 app.get('/api/customers', async (req, res) => {
     try {
-        const customers = await Customer.find();
+        const customers = await Customer.find().sort({ createdAt: -1 }); // .sort para trazer os mais recentes primeiro
         res.status(200).json({
             status: 'success',
             results: customers.length,
@@ -79,7 +75,6 @@ app.post('/api/customers', async (req, res) => {
         res.status(400).json({ status: 'fail', message: "Erro ao cadastrar cliente: " + err.message });
     }
 });
-
 
 // 6. INICIAR O SERVIDOR
 const PORT = process.env.PORT || 3000;
